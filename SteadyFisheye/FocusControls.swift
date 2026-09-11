@@ -27,19 +27,29 @@ struct FocusReticle: View {
 
 /// Vertical exposure compensation control, laid out the way the system camera
 /// does it: readout, track with a sun icon underneath, drag to bias.
+///
+/// While a drag is in flight the thumb is driven by local state instead of by
+/// the value the camera reports back. Feeding a high-rate published value back
+/// into the view that is currently being dragged rebuilds it under the finger
+/// on every event and brings SwiftUI's graph down with it.
 struct ExposureSlider: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
     let onInteraction: () -> Void
 
+    @State private var dragValue: Float?
+    @State private var lastPing = Date.distantPast
+
+    private var displayed: Float { dragValue ?? value }
+
     private var fraction: CGFloat {
         let span = max(range.upperBound - range.lowerBound, 0.001)
-        return CGFloat(min(max((value - range.lowerBound) / span, 0), 1))
+        return CGFloat(min(max((displayed - range.lowerBound) / span, 0), 1))
     }
 
     var body: some View {
         VStack(spacing: Theme.sp2) {
-            Text(String(format: "%+.1f", Double(value)))
+            Text(String(format: "%+.1f", Double(displayed)))
                 .font(Theme.value(11))
                 .foregroundColor(Theme.accent)
                 .lineLimit(1)
@@ -72,7 +82,20 @@ struct ExposureSlider: View {
                             let y = min(max(gesture.location.y, 0), height)
                             let position = 1 - Float(y / height)
                             let span = range.upperBound - range.lowerBound
-                            value = range.lowerBound + position * span
+                            let next = range.lowerBound + position * span
+                            dragValue = next
+                            value = next
+                            // Keep the auto-hide deadline pushed out while the
+                            // finger is down, but do not schedule a timer per
+                            // drag event.
+                            let now = Date()
+                            if now.timeIntervalSince(lastPing) > 1.0 {
+                                lastPing = now
+                                onInteraction()
+                            }
+                        }
+                        .onEnded { _ in
+                            dragValue = nil
                             onInteraction()
                         }
                 )

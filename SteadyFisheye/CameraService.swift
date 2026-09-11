@@ -58,7 +58,6 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     // so the newest request is coalesced instead of queueing every drag event.
     private let biasLock = NSLock()
     private var pendingBias: Float?
-    private var biasGeneration: UInt64 = 0
     private var biasApplyScheduled = false
     private var lastBiasPublish: CFTimeInterval = 0
 
@@ -214,40 +213,42 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     func setExposureBias(_ value: Float) {
         biasLock.lock()
         pendingBias = value
-        biasGeneration &+= 1
-        let generation = biasGeneration
         let shouldSchedule = !biasApplyScheduled
         biasApplyScheduled = true
         biasLock.unlock()
         guard shouldSchedule else { return }
+        applyPendingBiasSoon()
+    }
 
+    /// Applies the newest requested bias, dropping whatever arrived in the
+    /// meantime. The pending slot always holds the latest value, so skipping
+    /// the intermediate ones costs nothing and keeps the capture device from
+    /// being reconfigured once per drag event.
+    private func applyPendingBiasSoon() {
         sessionQueue.asyncAfter(deadline: .now() + 0.04) { [weak self] in
             guard let self else { return }
             self.biasLock.lock()
             let latest = self.pendingBias
-            let current = self.biasGeneration
             self.pendingBias = nil
+            // Cleared before the value is applied: anything arriving from here
+            // on schedules its own pass instead of being silently dropped.
             self.biasApplyScheduled = false
             self.biasLock.unlock()
-            // A newer drag event arrived while this one was waiting: skip it,
-            // the newer value is already on its way.
-            guard let latest = latest, current == generation else { return }
-            guard let device = self.activeDevice else { return }
 
+            guard let latest = latest, let device = self.activeDevice else { return }
             let low = device.minExposureTargetBias
             let high = max(device.maxExposureTargetBias, low)
             let clamped = min(max(latest, low), high)
             device.setExposureTargetBias(clamped, completionHandler: nil)
 
-            // Publish at most a few times a second: the readouts only need to
-            // keep up with the eye, and rebuilding the panel on every drag
-            // event is pointless work.
+            // Publish at most a few times a second. Each publish rebuilds every
+            // view that reads the bias — including the slider the finger is on
+            // — and doing that once per drag event is what took the UI down.
             let now = CACurrentMediaTime()
             guard now - self.lastBiasPublish > 0.08 else { return }
             self.lastBiasPublish = now
             DispatchQueue.main.async {
                 self.exposureBias = clamped
-                self.exposureBiasRange = low...high
             }
         }
     }
