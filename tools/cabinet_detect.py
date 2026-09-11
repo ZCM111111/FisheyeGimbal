@@ -50,12 +50,11 @@ def edge_support(magnitude, threshold, cx, cy, r, samples=180, tolerance=3):
     return strong / valid if valid else 0.0
 
 
-def detect(img, support_limit=0.55):
-    """Returns dict(cx, cy, r, support, ok, why) in pixels of the given image.
+def candidates(img, limit=6):
+    """All plausible circles, best first, as dicts with cx, cy, r, support.
 
-    Circles come from OpenCV's Hough transform rather than a hand-rolled one:
-    this runs per frame in an interactive tool, and the Python version of the
-    accumulator loop is orders of magnitude slower for the same proposals.
+    Returns several rather than one so a caller can offer the runner-up
+    proposals when the first is wrong.
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, _, magnitude = edge_maps(gray)
@@ -64,7 +63,7 @@ def detect(img, support_limit=0.55):
 
     threshold = 0.55 * float(np.percentile(magnitude, 97))
     if threshold <= 4:
-        return dict(ok=False, why="画面太平，没有可用边缘", support=0.0)
+        return []
 
     rmin = max(int(short * 0.12), 8)
     rmax = max(int(short * 0.78), rmin + 4)
@@ -76,25 +75,29 @@ def detect(img, support_limit=0.55):
         if circles is None:
             continue
         for circle in circles[0]:
-            cx, cy, r = (float(circle[0]), float(circle[1]), float(circle[2]))
-            proposals.append((cx, cy, r))
-        if len(proposals) >= 6:
+            proposals.append((float(circle[0]), float(circle[1]), float(circle[2])))
+        if len(proposals) >= limit:
             break
 
-    if not proposals:
-        return dict(ok=False, why="没有候选圆", support=0.0)
-
-    best = dict(ok=False, why="候选都不可用", support=0.0)
-    for cx, cy, r in proposals[:6]:
+    scored = []
+    for cx, cy, r in proposals[:limit]:
         score = edge_support(magnitude, threshold, cx, cy, r)
-        # Same shape-aware weighting as the app: a real edge along the circle,
-        # and a radius that is plausible for a cabinet in frame.
+        # A real edge along the circle, and a radius that is plausible for a
+        # cabinet in frame.
         weighted = score * min(r / (short * 0.35), 1.0)
-        if weighted > best.get("weighted", -1):
-            best = dict(ok=True, cx=cx, cy=cy, r=r, support=score,
-                        weighted=weighted, threshold=threshold, why="")
+        scored.append(dict(cx=cx, cy=cy, r=r, support=score, weighted=weighted))
+    scored.sort(key=lambda c: -c["weighted"])
+    return scored
 
-    if best.get("ok") and best["support"] < support_limit:
-        best["ok"] = False
-        best["why"] = f"边缘支持度只有 {best['support']:.2f}"
-    return best
+
+def detect(img, support_limit=0.55):
+    """The single best circle, or a reason why there is none."""
+    found = candidates(img)
+    if not found:
+        return dict(ok=False, why="没有候选圆", support=0.0)
+    best = found[0]
+    if best["support"] < support_limit:
+        return dict(ok=False, support=best["support"],
+                    why=f"边缘支持度只有 {best['support']:.2f}")
+    return dict(ok=True, cx=best["cx"], cy=best["cy"], r=best["r"],
+                support=best["support"], why="")

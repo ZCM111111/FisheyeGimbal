@@ -1,18 +1,23 @@
 """Interactive labeller for the cabinet dataset.
 
 The classical detector already proposes a box for most frames, so the work here
-is confirming or nudging rather than drawing every box by hand. The proposal is
-shown in green; press space to accept it, or drag to redraw.
+is confirming or nudging rather than drawing every box by hand.
+
+Everything can be done from the keyboard, because mouse coordinates in an
+OpenCV window are unreliable once the view is scaled. Drag still works and is
+mapped back through the window's image rect, but it is a convenience only.
 
 Usage:
     python tools/label_tool.py <frames folder> [--out <dataset folder>]
 
 Keys:
-    space / enter   accept the current box
-    drag            draw a new box (press and drag)
-    r               re-run the detector on this frame
+    space / enter   accept the current box and go on
+    arrows / wasd   move the box (hold shift for a bigger step)
+    - / =           shrink / grow the box
+    c               cycle the next detector candidate
+    r               re-run the detector on this frame at full resolution
     n               skip this frame
-    u               back to the previous frame
+    u               undo the previous label and go back
     q               save and quit
 
 Output (default: %USERPROFILE%\\fisheye_dataset, deliberately outside the repo):
@@ -31,8 +36,21 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cabinet_detect  # noqa: E402
 
-WINDOW = "label - space=accept  drag=redraw  r=redetect  n=skip  u=back  q=quit"
+WINDOW = "label tool"
 MAX_VIEW = 1100
+
+# waitKeyEx reports arrows as extended codes on Windows, and as 65361+ on the
+# other builds, so accept both spellings.
+ARROWS = {
+    2424832: "left", 65361: "left",
+    2490368: "up", 65362: "up",
+    2555904: "right", 65363: "right",
+    2621440: "down", 65364: "down",
+}
+
+LEGEND = (
+    "space=ok  arrows/wasd=move  -/=size  c=next candidate  r=redetect  n=skip  u=undo  q=quit",
+)
 
 
 class State:
@@ -41,29 +59,99 @@ class State:
         self.dragging = False
         self.origin = (0, 0)
         self.scale = 1.0
-        self.frame = None
-        self.view = None
+        self.window_rect = None  # (x, y, w, h) of the image inside the window
+        self.view_width = 1
+        self.view_height = 1
+        self.modified = False
 
 
-def to_view(point, state):
-    return int(point[0] * state.scale), int(point[1] * state.scale)
-
-
-def to_original(point, state):
-    return point[0] / state.scale, point[1] / state.scale
+def read_window_rect():
+    try:
+        return cv2.getWindowImageRect(WINDOW)
+    except Exception:
+        return None
 
 
 def on_mouse(event, x, y, flags, state):
+    """Drag to redraw. Window coordinates are mapped back to original pixels."""
+    if state.box is None or state.scale <= 0:
+        return
+
+    def to_original(px, py):
+        rect = state.window_rect
+        if rect and rect[2] > 0 and rect[3] > 0:
+            rx, ry, rw, rh = rect
+            view_w = state.view_width
+            view_h = state.view_height
+            px = (px - rx) * view_w / float(rw)
+            py = (py - ry) * view_h / float(rh)
+        return px / state.scale, py / state.scale
+
     if event == cv2.EVENT_LBUTTONDOWN:
         state.dragging = True
-        state.origin = (x, y)
-        state.box = (x, y, x, y)
+        state.origin = to_original(x, y)
+        state.box = (*state.origin, *state.origin)
+        state.modified = True
     elif event == cv2.EVENT_MOUSEMOVE and state.dragging:
-        state.box = (state.origin[0], state.origin[1], x, y)
+        cx, cy = to_original(x, y)
+        state.box = (state.origin[0], state.origin[1], cx, cy)
+        state.modified = True
     elif event == cv2.EVENT_LBUTTONUP:
         state.dragging = False
         x0, y0, x1, y1 = state.box
         state.box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        state.modified = True
+
+
+def clamp_box(box, width, height):
+    x0, y0, x1, y1 = box
+    x0 = min(max(x0, 0.0), width - 2.0)
+    y0 = min(max(y0, 0.0), height - 2.0)
+    x1 = min(max(x1, x0 + 2.0), width - 1.0)
+    y1 = min(max(y1, y0 + 2.0), height - 1.0)
+    return (x0, y0, x1, y1)
+
+
+def move_box(box, direction, step, width, height):
+    x0, y0, x1, y1 = box
+    if direction == "left":
+        x0 -= step
+        x1 -= step
+    elif direction == "right":
+        x0 += step
+        x1 += step
+    elif direction == "up":
+        y0 -= step
+        y1 -= step
+    else:
+        y0 += step
+        y1 += step
+    # Keep the size, only slide the box inside the frame.
+    if x0 < 0:
+        x1 -= x0
+        x0 = 0
+    if y0 < 0:
+        y1 -= y0
+        y0 = 0
+    if x1 > width - 1:
+        x0 -= x1 - (width - 1)
+        x1 = width - 1
+    if y1 > height - 1:
+        y0 -= y1 - (height - 1)
+        y1 = height - 1
+    return clamp_box((x0, y0, x1, y1), width, height)
+
+
+def resize_box(box, delta, width, height):
+    cx = (box[0] + box[2]) * 0.5
+    cy = (box[1] + box[3]) * 0.5
+    half_w = max((box[2] - box[0]) * 0.5 + delta, 4.0)
+    half_h = max((box[3] - box[1]) * 0.5 + delta, 4.0)
+    return clamp_box((cx - half_w, cy - half_h, cx + half_w, cy + half_h), width, height)
+
+
+def box_from_circle(cx, cy, r, width, height):
+    return clamp_box((cx - r, cy - r, cx + r, cy + r), width, height)
 
 
 def normalise(box, width, height):
@@ -72,25 +160,35 @@ def normalise(box, width, height):
             abs(x1 - x0) / width, abs(y1 - y0) / height)
 
 
-def detect_small(image):
-    """Detects on a downscaled copy and scales the result back.
+def stem_for(index, path):
+    """Numbered, so two folders with the same file name cannot collide."""
+    return "%04d_%s" % (index, os.path.splitext(os.path.basename(path))[0])
 
-    The app itself works on a decimated grid, and running the detector at full
-    resolution costs seconds per frame for no accuracy gain.
+
+def proposals(image):
+    """Candidate circles at full resolution, best first.
+
+    Detection runs on a downscaled copy: the app itself works on a decimated
+    grid, and the full-resolution Hough transform costs seconds per frame for
+    no accuracy gain.
     """
     h, w = image.shape[:2]
     scale = min(1.0, 480.0 / max(w, h))
-    if scale >= 1.0:
-        return cabinet_detect.detect(image)
-    small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    result = cabinet_detect.detect(small)
-    if not result.get("ok"):
-        return result
-    scaled = dict(result)
-    scaled["cx"] = result["cx"] / scale
-    scaled["cy"] = result["cy"] / scale
-    scaled["r"] = result["r"] / scale
-    return scaled
+    small = image if scale >= 1.0 else cv2.resize(
+        image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    found = cabinet_detect.candidates(small)
+    return [dict(cx=c["cx"] / scale, cy=c["cy"] / scale, r=c["r"] / scale,
+                 support=c["support"]) for c in found]
+
+
+def legend(canvas, lines, colour):
+    height = canvas.shape[0]
+    for i, text in enumerate(lines):
+        y = height - 14 - 26 * (len(lines) - 1 - i)
+        cv2.putText(canvas, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(canvas, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    colour, 1, cv2.LINE_AA)
 
 
 def main():
@@ -136,15 +234,27 @@ def main():
         print("no images in", sources)
         sys.exit(1)
     print(f"{len(files)} 张待标注，输出到 {out}")
-    print("空格=接受绿框  拖动=重画  r=重检测  n=跳过  u=退回  q=保存退出")
+    print("空格=接受  方向键/WASD=移动  -/=缩小放大  c=换候选  r=重检测  n=跳过  u=退回  q=保存退出")
+    print("标注对象：内屏那个圆（不含外键和外圈）")
     print()
+
+    # Resume: a frame already labelled keeps its file, so restarting the tool
+    # does not mean redoing the first N frames.
+    pending = [i for i, path in enumerate(files)
+               if not os.path.exists(os.path.join(labels_dir, stem_for(i, path) + ".txt"))]
+    already = len(files) - len(pending)
+    start = pending[0] if pending else 0
+    if already:
+        print(f"已有 {already} 张标好，从第 {start + 1} 张继续")
+    if not pending:
+        print("全部标完了 — 用 u 可以回头改，或直接关掉窗口")
 
     state = State()
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(WINDOW, on_mouse, state)
 
     history = []
-    index = 0
+    index = start
     saved = 0
     skipped = 0
 
@@ -159,39 +269,68 @@ def main():
         state.scale = min(1.0, MAX_VIEW / max(w, h))
         state.view = cv2.resize(image, None, fx=state.scale, fy=state.scale) \
             if state.scale < 1.0 else image.copy()
-        state.frame = image
-        state.box = None
+        state.view_height, state.view_width = state.view.shape[:2]
+        state.modified = False
 
-        result = detect_small(image)
-        if result.get("ok"):
-            cx, cy, r = result["cx"], result["cy"], result["r"]
-            state.box = (max(cx - r, 0), max(cy - r, 0),
-                         min(cx + r, w - 1), min(cy + r, h - 1))
-            print(f"[{index + 1}/{len(files)}] {name}: 提议支持度 {result['support']:.2f}")
+        found = proposals(image)
+        chosen = 0
+        if found:
+            state.box = box_from_circle(found[0]["cx"], found[0]["cy"], found[0]["r"], w, h)
+            print(f"[{index + 1}/{len(files)}] {name}: 候选 {len(found)} 个，"
+                  f"首选支持度 {found[0]['support']:.2f}")
         else:
-            print(f"[{index + 1}/{len(files)}] {name}: {result.get('why', '无提议')} — 请手动画框")
+            # Something to nudge rather than nothing at all.
+            side = min(w, h) * 0.35
+            state.box = box_from_circle(w / 2, h / 2, side, w, h)
+            print(f"[{index + 1}/{len(files)}] {name}: 无候选圆 — 用方向键和 -/= 自己摆")
 
+        step = max(2, int(min(w, h) * 0.005))
         action = None
         while action is None:
             canvas = state.view.copy()
-            if state.box is not None:
-                x0, y0 = to_view((state.box[0], state.box[1]), state)
-                x1, y1 = to_view((state.box[2], state.box[3]), state)
-                colour = (0, 255, 0) if result.get("ok") else (0, 165, 255)
-                cv2.rectangle(canvas, (x0, y0), (x1, y1), colour, 2)
-                cv2.putText(canvas, "accept with space" if result.get("ok") else "drag a box",
-                            (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
-            else:
-                cv2.putText(canvas, "drag a box around the screen", (10, 26),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2, cv2.LINE_AA)
-            cv2.imshow(WINDOW, canvas)
-            key = cv2.waitKey(20) & 0xFF
+            state.window_rect = read_window_rect()
 
-            if key in (13, 32):                     # enter / space
-                if state.box and abs(state.box[2] - state.box[0]) > 8:
-                    # Numbered, so two folders with the same file name cannot
-                    # collide in the dataset.
-                    stem = "%04d_%s" % (index, os.path.splitext(name)[0])
+            if state.box is not None:
+                x0, y0, x1, y1 = state.box
+                p0 = (int(x0 * state.scale), int(y0 * state.scale))
+                p1 = (int(x1 * state.scale), int(y1 * state.scale))
+                if state.modified or not found:
+                    colour = (255, 210, 0)      # hand-adjusted: cyan
+                else:
+                    colour = (0, 255, 0)        # proposal: green
+                cv2.rectangle(canvas, p0, p1, colour, 2)
+                cv2.circle(canvas, ((p0[0] + p1[0]) // 2, (p0[1] + p1[1]) // 2),
+                           3, colour, -1)
+
+            lines = [f"{index + 1}/{len(files)}  {name}"]
+            if found:
+                lines.append(f"candidate {chosen + 1}/{len(found)}  "
+                             f"support {found[chosen]['support']:.2f}")
+                if state.modified:
+                    lines.append("hand-adjusted")
+            else:
+                lines.append("no proposal - place the box yourself")
+            lines.append(LEGEND[0])
+            legend(canvas, lines, (255, 255, 255))
+
+            cv2.imshow(WINDOW, canvas)
+            key = cv2.waitKeyEx(20)
+
+            code = key & 0xFF if key != -1 else -1
+            direction = ARROWS.get(key)
+            if direction is None and code != -1:
+                letter = chr(code) if 32 <= code < 127 else ""
+                direction = {"a": "left", "d": "right", "w": "up", "s": "down",
+                             "A": "left", "D": "right", "W": "up", "S": "down"}.get(letter)
+
+            if direction:
+                # Lower-case wasd nudges, upper-case (shift held) jumps.
+                big = 32 <= code < 127 and chr(code).isupper()
+                state.box = move_box(state.box, direction, step * (5 if big else 1), w, h)
+                state.modified = True
+            elif key in (13, 32):                   # enter / space
+                if abs(state.box[2] - state.box[0]) > 8:
+                    stem = stem_for(index, path)
                     shutil.copyfile(path, os.path.join(images_dir, stem + ".jpg"))
                     label = normalise(state.box, w, h)
                     with open(os.path.join(labels_dir, stem + ".txt"), "w") as handle:
@@ -200,19 +339,32 @@ def main():
                     history.append((path, index))
                     action = "next"
                 else:
-                    print("  box too small — drag one first")
-            elif key == ord("r"):
-                result = cabinet_detect.detect(image)
-                if result.get("ok"):
-                    cx, cy, r = result["cx"], result["cy"], result["r"]
-                    state.box = (max(cx - r, 0), max(cy - r, 0),
-                                 min(cx + r, w - 1), min(cy + r, h - 1))
-            elif key == ord("n"):
+                    print("  框太小了，先调大一点")
+            elif code in (ord("-"), ord("_")) and state.box:
+                state.box = resize_box(state.box, -step, w, h)
+                state.modified = True
+            elif code in (ord("="), ord("+")) and state.box:
+                state.box = resize_box(state.box, step, w, h)
+                state.modified = True
+            elif code == ord("c") and found and state.box:
+                chosen = (chosen + 1) % len(found)
+                pick = found[chosen]
+                state.box = box_from_circle(pick["cx"], pick["cy"], pick["r"], w, h)
+                state.modified = True
+                print(f"  候选 {chosen + 1}/{len(found)} 支持度 {pick['support']:.2f}")
+            elif code == ord("r"):
+                found = proposals(image)
+                chosen = 0
+                if found:
+                    pick = found[0]
+                    state.box = box_from_circle(pick["cx"], pick["cy"], pick["r"], w, h)
+                    state.modified = False
+            elif code == ord("n"):
                 skipped += 1
                 action = "next"
-            elif key == ord("u"):
+            elif code == ord("u"):
                 action = "back"
-            elif key == ord("q"):
+            elif code == ord("q"):
                 action = "quit"
 
         if action == "quit":
@@ -220,8 +372,7 @@ def main():
         if action == "back":
             if history:
                 previous_path, previous_index = history.pop()
-                stem = "%04d_%s" % (previous_index,
-                                    os.path.splitext(os.path.basename(previous_path))[0])
+                stem = stem_for(previous_index, previous_path)
                 for folder, suffix in ((images_dir, ".jpg"), (labels_dir, ".txt")):
                     candidate = os.path.join(folder, stem + suffix)
                     if os.path.exists(candidate):
@@ -241,8 +392,9 @@ def main():
         handle.write("names:\n  0: screen\n")
 
     print()
-    print(f"已标注 {saved} 张，跳过 {skipped} 张")
-    print("数据集:", out)
+    total = len([f for f in os.listdir(labels_dir) if f.endswith(".txt")])
+    print(f"本次新增 {saved} 张，跳过 {skipped} 张")
+    print(f"数据集共 {total} 张：{out}")
     print("现在可以训练:")
     print(f"  pip install ultralytics")
     print(f"  yolo detect train data={os.path.join(out, 'data.yaml')} model=yolov8n.pt epochs=100 imgsz=640")
