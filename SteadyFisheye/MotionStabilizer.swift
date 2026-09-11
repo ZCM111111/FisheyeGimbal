@@ -67,9 +67,11 @@ final class MotionStabilizer: ObservableObject {
     private var aimTargetWorld: SIMD3<Float>?
     /// Time constant of that chase, in seconds. Larger is calmer: the recording
     /// path uses a larger value so the footage does not visibly creep.
-    var aimSmoothing: Double = 0.5
-    /// Stop correcting inside this angle, so the picture does not hunt.
-    private let aimDeadZone: Float = 0.0035
+    var aimSmoothing: Double = 0.2
+    /// Stop correcting inside this angle, so the picture does not hunt. Kept
+    /// tiny: the point is to have the target pinned in the middle, and the chase
+    /// itself already filters out the detector's frame-to-frame wobble.
+    private let aimDeadZone: Float = 0.0009
     private var samples: [MotionSample] = []
     private let maxSampleCount = 36
     private var filtered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))

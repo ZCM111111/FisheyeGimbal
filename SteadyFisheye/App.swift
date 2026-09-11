@@ -209,23 +209,30 @@ final class CameraApp: ObservableObject {
 
     /// How often the search runs.
     ///
-    /// Five times a second: often enough that tracking reads as continuous,
-    /// sparse enough that a Vision inference is not fighting the render pipeline
-    /// for the whole frame budget. Since each pass corrects a fraction of the
-    /// error, this rate sets how smoothly the picture drifts rather than how big
-    /// each move is.
-    private static let autoAimInterval: TimeInterval = 0.2
+    /// Ten times a second. This is the tracking loop's sample rate: the glide
+    /// below can only be as fast as the target is refreshed, and chasing harder
+    /// than the target arrives is how a tracker starts oscillating. Each pass is
+    /// one Vision inference, which the neural engine handles well inside the
+    /// frame budget.
+    private static let autoAimInterval: TimeInterval = 0.1
     /// Two detections this close together are the same cabinet.
     private static let autoAimAgreement: Float = 0.06
     /// Time constant of the centring glide, in seconds. The stabiliser eases the
     /// lock toward the reported target once per motion sample, so these set how
     /// calmly the picture drifts rather than how big each step is.
-    private static let autoAimSmoothing: Double = 0.5
-    /// Calmer while recording, so the footage does not visibly creep.
-    private static let autoAimRecordingSmoothing: Double = 1.3
+    ///
+    /// Short on purpose: the cabinet is meant to sit in the middle no matter
+    /// where the phone is pointed, which is a chasing feel, not a gentle one.
+    /// The limit is the detection latency — chase much faster than
+    /// `autoAimInterval` and the correction starts overshooting the target it
+    /// was given.
+    private static let autoAimSmoothing: Double = 0.18
+    /// Slightly calmer while recording, so a take does not look like it is
+    /// hunting, but still fast enough to hold the cabinet centred throughout.
+    private static let autoAimRecordingSmoothing: Double = 0.3
     /// Below this much error, moving the picture is not worth it.
-    private static let autoAimToleranceDegrees: Float = 0.6
-    private static let autoAimRecordingTolerance: Float = 1.5
+    private static let autoAimToleranceDegrees: Float = 0.15
+    private static let autoAimRecordingTolerance: Float = 0.4
     /// A correction this large is a new answer rather than tracking, and a single
     /// frame can land on a key or a lamp — so it has to repeat before the picture
     /// moves for it. Ordinary tracking needs no such ceremony.
