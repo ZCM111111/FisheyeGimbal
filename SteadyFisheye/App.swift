@@ -65,6 +65,9 @@ final class CameraApp: ObservableObject {
         guard !started else { return }
         started = true
 
+        // Bring the camera up on the same lens whose calibration was restored.
+        camera.initialLens = settings.activeLens
+
         motion.start()
         CameraService.requestAccess { [weak self] granted in
             guard let self else { return }

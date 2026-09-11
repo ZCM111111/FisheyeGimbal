@@ -89,6 +89,11 @@ struct ControlPanel: View {
                        value: "\(camera.measuredFPS) / 60 帧",
                        valueColor: camera.measuredFPS >= 55 ? Theme.success : Theme.warning)
             ReadoutRow(label: "镜头", value: camera.lens.title)
+            // Calibration is remembered per lens and restored on launch, so the
+            // panel says which state this lens is in.
+            ReadoutRow(label: "标定",
+                       value: settings.hasStoredProfile ? "已存本机" : "未标定",
+                       valueColor: settings.hasStoredProfile ? Theme.success : Theme.warning)
             // Live exposure compensation, and whether AE/AF is frozen.
             ReadoutRow(label: "曝光",
                        value: String(format: "%+.1f EV", Double(camera.exposureBias)),
@@ -168,7 +173,12 @@ struct ControlPanel: View {
                       titles: CameraService.Lens.allCases.map { $0.title },
                       selection: Binding(
                         get: { camera.lens },
-                        set: { camera.setLens($0) }))
+                        set: { lens in
+                            // Switch the stored profile before the camera, so
+                            // the values in use are saved under the old lens.
+                            settings.activate(lensKey: lens.rawValue)
+                            camera.setLens(lens)
+                        }))
 
             Segmented(values: MotionStabilizer.Mode.allCases,
                       titles: MotionStabilizer.Mode.allCases.map { $0.title },

@@ -96,6 +96,9 @@ final class CameraService: NSObject, ObservableObject,
     private let audioQueue = DispatchQueue(label: "steadyfisheye.camera.audio",
                                            qos: .userInitiated)
     private var selectedLens: Lens = .ultraWide
+    /// Lens to bring up on the first configuration, so the camera starts on the
+    /// same lens whose stored calibration was loaded.
+    var initialLens: Lens?
     private var configured = false
     private var output: AVCaptureVideoDataOutput?
     private var lastFrameTimestamp: Double = 0
@@ -326,6 +329,13 @@ final class CameraService: NSObject, ObservableObject,
     }
 
     private func configure() {
+        // The very first configuration honours the lens whose calibration was
+        // restored, so the app does not start on one lens and load the other
+        // lens's profile.
+        if let initial = initialLens {
+            selectedLens = initial
+            initialLens = nil
+        }
         session.beginConfiguration()
         // inputPriority lets the explicitly selected activeFormat (including
         // its 60 FPS capability) win over a preset's automatic format choice.

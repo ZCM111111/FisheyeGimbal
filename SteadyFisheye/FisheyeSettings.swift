@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 
 enum FisheyeProjection: Int, CaseIterable, Identifiable {
@@ -30,6 +31,95 @@ struct FisheyeParameters {
 }
 
 final class FisheyeSettings: ObservableObject {
+    /// Whether the lens in use already has stored values, for the panel readout.
+    @Published private(set) var hasStoredProfile = false
+
+    /// Saved values per lens, keyed by `CameraService.Lens.rawValue`.
+    private var profiles: [String: LensProfile]
+    private(set) var activeLensKey: String
+    private var autosave: Set<AnyCancellable> = []
+
+    /// The lens whose profile is loaded, so the camera can start on the same one.
+    var activeLens: CameraService.Lens {
+        CameraService.Lens(rawValue: activeLensKey) ?? .ultraWide
+    }
+
+    init() {
+        let stored = SettingsStore.loadProfiles()
+        profiles = stored
+        let key = SettingsStore.loadActiveLens() ?? CameraService.Lens.ultraWide.rawValue
+        activeLensKey = key
+        if let profile = stored[key] {
+            applyProfile(profile)
+            hasStoredProfile = true
+        }
+
+        // Writes are debounced by a second, so dragging a slider or running the
+        // auto-calibration does not hit the disk on every value change.
+        objectWillChange
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.persistCurrentProfile() }
+            .store(in: &autosave)
+    }
+
+    /// Switches profiles. The values in use are stored under the outgoing lens
+    /// first, so nothing measured is lost when the user changes lens.
+    func activate(lensKey: String) {
+        guard lensKey != activeLensKey else { return }
+        persistCurrentProfile()
+        activeLensKey = lensKey
+        SettingsStore.saveActiveLens(lensKey)
+        if let profile = profiles[lensKey] {
+            applyProfile(profile)
+            hasStoredProfile = true
+        } else {
+            // No measurements for this lens yet: start from neutral geometry
+            // rather than carrying the other lens's calibration across.
+            applyProfile(LensProfile())
+            hasStoredProfile = false
+        }
+    }
+
+    private func currentProfile() -> LensProfile {
+        LensProfile(lensHalfFov: lensHalfFov,
+                    circleScale: circleScale,
+                    outputFov: outputFov,
+                    projection: projection.rawValue,
+                    k1: k1,
+                    k2: k2,
+                    centerX: centerX,
+                    centerY: centerY,
+                    edgeFeather: edgeFeather,
+                    fillScreen: fillScreen,
+                    sharpness: sharpness,
+                    localContrast: localContrast,
+                    hazeCompensation: hazeCompensation)
+    }
+
+    private func applyProfile(_ profile: LensProfile) {
+        lensHalfFov = profile.lensHalfFov
+        circleScale = profile.circleScale
+        outputFov = profile.outputFov
+        projection = FisheyeProjection(rawValue: profile.projection) ?? .equidistant
+        k1 = profile.k1
+        k2 = profile.k2
+        centerX = profile.centerX
+        centerY = profile.centerY
+        edgeFeather = profile.edgeFeather
+        fillScreen = profile.fillScreen
+        sharpness = profile.sharpness
+        localContrast = profile.localContrast
+        hazeCompensation = profile.hazeCompensation
+    }
+
+    private func persistCurrentProfile() {
+        profiles[activeLensKey] = currentProfile()
+        SettingsStore.saveProfiles(profiles)
+        // Guarded: `@Published` fires on every assignment, so setting this
+        // unconditionally would re-trigger the debounced save forever.
+        if !hasStoredProfile { hasStoredProfile = true }
+    }
+
     @Published var projection: FisheyeProjection = .equidistant
     /// Half of the angular coverage the glass delivers. This does not create
     /// black edges any more (fill mode pins samples to the rim), so its job is

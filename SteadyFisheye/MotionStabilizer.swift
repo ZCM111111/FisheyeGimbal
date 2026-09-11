@@ -90,6 +90,15 @@ final class MotionStabilizer: ObservableObject {
         SIMD3<Float>(0, 0, -1)
     ))
 
+    /// Restores the mode the user last chose, so a launch does not silently
+    /// drop back to the default stabilisation.
+    init() {
+        if let raw = SettingsStore.loadStabilizerMode(), let saved = Mode(rawValue: raw) {
+            modeValue = saved
+            mode = saved
+        }
+    }
+
     var smoothing: Double {
         get {
             lock.lock(); defer { lock.unlock() }
@@ -322,6 +331,7 @@ final class MotionStabilizer: ObservableObject {
     func setMode(_ newMode: Mode) {
         lock.lock()
         modeValue = newMode
+        SettingsStore.saveStabilizerMode(newMode.rawValue)
         if hasSample {
             // Level-latched: re-centring chooses the pointing direction only.
             lockedQuaternion = levelLockedAttitude(from: filtered)
