@@ -66,9 +66,13 @@ struct ContentView: View {
             Label(camera.running ? "LIVE" : "WAITING",
                   systemImage: camera.running ? "video.fill" : "video.slash")
                 .foregroundStyle(camera.running ? .green : .orange)
-            Text(camera.formatText)
-                .lineLimit(1)
-                .foregroundStyle(.white.opacity(0.75))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(camera.formatText)
+                    .lineLimit(1)
+                Text("target 60  /  actual \(camera.measuredFPS) fps")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.65))
+            }
             Spacer()
             Label(motion.locked ? "LOCKED" : "IMU…", systemImage: "gyroscope")
                 .foregroundStyle(motion.available ? .green : .orange)
@@ -130,6 +134,9 @@ private struct SettingsSheet: View {
                             Text(mode.title).tag(mode)
                         }
                     }
+                    Text("60 FPS target · \(camera.measuredFPS) FPS measured")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Picker("Camera lens", selection: Binding(
                         get: { camera.lens },
                         set: { camera.setLens($0) }

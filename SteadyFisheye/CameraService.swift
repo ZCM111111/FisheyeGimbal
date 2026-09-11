@@ -28,8 +28,10 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     let session = AVCaptureSession()
 
     @Published private(set) var running = false
-    @Published private(set) var lens: Lens = .wide
+    @Published private(set) var lens: Lens = .ultraWide
     @Published private(set) var formatText = "No camera"
+    @Published private(set) var activeFPS = 60
+    @Published private(set) var measuredFPS = 0
     @Published private(set) var error: String?
 
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
@@ -38,9 +40,12 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                                               qos: .userInitiated)
     private let videoQueue = DispatchQueue(label: "steadyfisheye.camera.video",
                                            qos: .userInitiated)
-    private var selectedLens: Lens = .wide
+    private var selectedLens: Lens = .ultraWide
     private var configured = false
     private var output: AVCaptureVideoDataOutput?
+    private var lastFrameTimestamp: Double = 0
+    private var fpsEstimate: Double = 0
+    private var lastFPSPublishTime: Double = 0
 
     static func requestAccess(completion: @escaping (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -106,7 +111,9 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     private func configure() {
         session.beginConfiguration()
-        session.sessionPreset = .high
+        // inputPriority lets the explicitly selected activeFormat (including
+        // its 60 FPS capability) win over a preset's automatic format choice.
+        session.sessionPreset = .inputPriority
 
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [selectedLens.deviceType, .builtInWideAngleCamera],
@@ -133,13 +140,24 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             if device.isGeometricDistortionCorrectionSupported {
                 device.isGeometricDistortionCorrectionEnabled = false
             }
-            let targetDuration = CMTime(value: 1, timescale: 30)
-            if device.activeFormat.videoSupportedFrameRateRanges.contains(where: {
-                $0.minFrameRate <= 30 && $0.maxFrameRate >= 30
-            }) {
-                device.activeVideoMinFrameDuration = targetDuration
-                device.activeVideoMaxFrameDuration = targetDuration
+
+            // Pick a real 60 FPS format instead of only changing the frame
+            // duration on the current format. Prefer 1080p or larger while
+            // keeping the format close to the sensor's native aspect ratio.
+            if let sixtyFormat = best60FPSFormat(for: device) {
+                device.activeFormat = sixtyFormat
             }
+            let targetDuration = CMTime(value: 1, timescale: 60)
+            let supports60 = device.activeFormat.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= 60 && $0.maxFrameRate >= 60
+            }
+            guard supports60 else {
+                device.unlockForConfiguration()
+                finishConfiguration(with: "This camera does not provide 60 FPS")
+                return
+            }
+            device.activeVideoMinFrameDuration = targetDuration
+            device.activeVideoMaxFrameDuration = targetDuration
             device.unlockForConfiguration()
         } catch {
             finishConfiguration(with: "Camera setup failed: \(error.localizedDescription)")
@@ -180,10 +198,37 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         session.commitConfiguration()
         configured = true
         let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-        let format = "\(dimensions.width)x\(dimensions.height)  " + fourCC(pixelFormat)
+        let format = "\(dimensions.width)x\(dimensions.height)  60 FPS  " + fourCC(pixelFormat)
+        let effectiveLens: Lens = device.deviceType == .builtInUltraWideCamera ? .ultraWide : .wide
         DispatchQueue.main.async { [weak self] in
+            self?.lens = effectiveLens
+            self?.activeFPS = 60
             self?.formatText = format
             self?.error = nil
+        }
+    }
+
+    /// Select the closest practical 60 FPS format. 1080p is preferred over
+    /// 4K because the fisheye remap is performed for every output pixel.
+    private func best60FPSFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        let candidates = device.formats.filter { format in
+            let supports60 = format.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= 60 && $0.maxFrameRate >= 60
+            }
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return supports60 && dimensions.width >= 1280 && dimensions.height >= 720
+        }
+        return candidates.min { lhs, rhs in
+            func score(_ format: AVCaptureDevice.Format) -> Double {
+                let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                let pixels = Double(d.width) * Double(d.height)
+                let targetPixels = 1920.0 * 1080.0
+                let aspect = Double(d.width) / max(Double(d.height), 1)
+                let aspectPenalty = abs(aspect - (16.0 / 9.0)) * 250_000
+                // Prefer near-1080p, then the closest 16:9 format.
+                return abs(pixels - targetPixels) + aspectPenalty
+            }
+            return score(lhs) < score(rhs)
         }
     }
 
@@ -198,6 +243,9 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         }
         session.commitConfiguration()
         output = nil
+        lastFrameTimestamp = 0
+        fpsEstimate = 0
+        lastFPSPublishTime = 0
         configured = false
     }
 
@@ -224,6 +272,23 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                        from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-        onFrame?(pixelBuffer, timestamp.isFinite ? timestamp : CACurrentMediaTime())
+        let captureTime = timestamp.isFinite ? timestamp : CACurrentMediaTime()
+        if lastFrameTimestamp > 0 {
+            let delta = captureTime - lastFrameTimestamp
+            if delta > 0.001 && delta < 1 {
+                let measured = 1.0 / delta
+                fpsEstimate = fpsEstimate == 0 ? measured : fpsEstimate * 0.9 + measured * 0.1
+                let now = CACurrentMediaTime()
+                if now - lastFPSPublishTime > 0.25 {
+                    lastFPSPublishTime = now
+                    let value = Int(fpsEstimate.rounded())
+                    DispatchQueue.main.async { [weak self] in
+                        self?.measuredFPS = value
+                    }
+                }
+            }
+        }
+        lastFrameTimestamp = captureTime
+        onFrame?(pixelBuffer, captureTime)
     }
 }

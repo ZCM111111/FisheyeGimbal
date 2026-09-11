@@ -6,11 +6,11 @@ A clean iOS prototype for a clip-on fisheye lens:
 - Core Motion locks the camera to the direction captured when the app starts or when Recenter is pressed.
 - Video frames are matched to a timestamped IMU history and then lightly smoothed at display time to reduce 120 Hz motion / 60 Hz rendering jitter.
 - Hold mode keeps the world direction fixed. Follow mode lets the lock drift toward a deliberate slow turn.
-- The preview uses the rear camera and disables Apple's video stabilization and geometric distortion correction so the lens can be calibrated from raw pixels.
+- The preview uses the rear 0.5x ultra-wide camera by default, requests a real 60 FPS capture format, and disables Apple's video stabilization and geometric distortion correction so the lens can be calibrated from raw pixels.
 
 ## Build
 
-Open `SteadyFisheye.xcodeproj` on macOS with Xcode 15 or newer. Select an iPhone target, set a signing team, and run on a real device. The simulator cannot provide a useful camera/IMU result.
+Open `SteadyFisheye.xcodeproj` on macOS with Xcode 15 or newer. Select an iPhone target, set a signing team, and run on a real device. The simulator cannot provide a useful camera/IMU result. The app requests a real 60 FPS camera format; the status bar shows the measured rate. If a particular device cannot provide 60 FPS on its selected camera, it reports an error instead of silently running at 30.
 
 Codemagic is configured in `codemagic.yaml`. Connect the GitHub repository, select the `ios-unsigned` workflow, and start a build from `main`. The `SteadyFisheye-unsigned.ipa` artifact is deliberately not signed; install it on Windows with Sideloadly or AltStore using your Apple ID.
 
