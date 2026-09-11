@@ -12,3 +12,4 @@ tools/*.jpg
 icon-sizes.png
 *.ips
 .DS_Store
+tools/__pycache__/
