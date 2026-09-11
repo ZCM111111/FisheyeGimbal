@@ -33,6 +33,37 @@ VIDEO_FPS = 30.0
 DETECT_WIDTH = 480          # detection cost is per frame; accuracy is unaffected
 
 
+def ring_blob(frame):
+    """Centroid and size of the lit ring, without assuming it is a circle.
+
+    Hand-held footage films the cabinet from an angle, so the ring is an ellipse
+    and a circle fit locks onto the wrong thing — which is exactly what happened
+    the first time this ran on a reference clip. A brightness blob does not care
+    about the shape, and the lit ring is by far the brightest large object in the
+    frame. It is also the measure that works on the app's own output, where the
+    ring genuinely is a circle in the middle.
+    """
+    value = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[:, :, 2]
+    threshold = max(int(np.percentile(value, 96)), 90)
+    mask = (value >= threshold).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
+
+    best = None
+    for index in range(1, count):
+        area = stats[index, cv2.CC_STAT_AREA]
+        box_w = stats[index, cv2.CC_STAT_WIDTH]
+        box_h = stats[index, cv2.CC_STAT_HEIGHT]
+        if area < 400 or box_w < 10 or box_h < 10:
+            continue
+        aspect = box_w / box_h
+        if not 0.45 <= aspect <= 2.2:      # a ring seen at an angle stays roundish
+            continue
+        if best is None or area > best[0]:
+            best = (area, centroids[index], (box_w + box_h) / 4)
+    return best
+
+
 def frames_from_video(path):
     capture = cv2.VideoCapture(path)
     if not capture.isOpened():
@@ -148,6 +179,28 @@ def analyse(frames, label, montage_path=None, consecutive=True):
           f"{100 * rs.mean() / short:.1f}% of the short side)")
     print(f"   -> to match this framing, set 机台占比 to about "
           f"{100 * 2 * rs.mean() / short:.0f}%")
+
+    # The lit ring, tracked without a circle fit, for clips where the cabinet is
+    # seen at an angle.
+    blobs = []
+    for frame in frames:
+        found = ring_blob(frame)
+        if found is not None:
+            blobs.append(found)
+
+    if len(blobs) >= 3:
+        bx = np.array([b[1][0] for b in blobs])
+        by = np.array([b[1][1] for b in blobs])
+        br = np.array([b[2] for b in blobs])
+        bspread = float(np.hypot(bx - bx.mean(), by - by.mean()).mean())
+        bsteps = np.hypot(np.diff(bx), np.diff(by))
+        bduration = max(len(blobs) - 1, 1) / VIDEO_FPS
+        print(f"   ring blob         {len(blobs)}/{len(frames)} frames, "
+              f"mean radius {br.mean():.0f} px")
+        print(f"   ring spread       {bspread:.1f} px  "
+              f"({100 * bspread / short:.2f}% of the short side)")
+        print(f"   ring jitter       {float(bsteps.mean()):.1f} px/frame  "
+              f"({float(bsteps.sum() / bduration):.0f} px/s)")
 
     if montage_path:
         every = max(1, len(frames) // 12)
