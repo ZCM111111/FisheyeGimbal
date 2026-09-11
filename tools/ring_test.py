@@ -1,3 +1,4 @@
+import tempfile
 import os
 import sys
 
@@ -25,7 +26,7 @@ import os
 import cv2
 import numpy as np
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ring_out")
+OUT = os.path.join(tempfile.gettempdir(), "fisheye_detector_out")
 FILES = sorted(sum([glob.glob(os.path.join(d, "*")) for d in DATA_DIRS], []))
 
 MIN_BLOBS = 5

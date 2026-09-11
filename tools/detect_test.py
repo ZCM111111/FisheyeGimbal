@@ -1,3 +1,4 @@
+import tempfile
 """Runs the app's cabinet detector over real footage, in Python.
 
 This mirrors CabinetDetector.swift exactly: same decimation (256 wide), same
@@ -19,7 +20,7 @@ MAX_AREA = 0.60
 MIN_FILL = 0.72
 MIN_AXIS_RATIO = 0.45
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "detect_out")
+OUT = os.path.join(tempfile.gettempdir(), "fisheye_detector_out")
 
 
 def otsu(gray):

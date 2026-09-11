@@ -1,3 +1,4 @@
+import tempfile
 import os
 import sys
 
@@ -24,7 +25,7 @@ import numpy as np
 
 HOME_GLOB = DATA_DIRS[0]
 ARCADE_DIRS = DATA_DIRS
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dual_out")
+OUT = os.path.join(tempfile.gettempdir(), "fisheye_detector_out")
 
 MIN_BLOBS = 5
 MIN_AREA = 4

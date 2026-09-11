@@ -1,6 +1,11 @@
-TOOLS = os.path.dirname(os.path.abspath(__file__))
 import os
 import sys
+import tempfile
+
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+# Written to the system temp folder: nothing derived from someone's footage is
+# ever placed inside the repository.
+OUT = os.path.join(tempfile.gettempdir(), "fisheye_check_montage.jpg")
 
 # Frame folders are passed on the command line so this file carries no
 # personal paths: python check_montage.py <folder> [folder ...]
@@ -42,7 +47,7 @@ w = max(row1.shape[1], row2.shape[1])
 row1 = cv2.copyMakeBorder(row1,0,0,0,w-row1.shape[1],cv2.BORDER_CONSTANT,value=(20,20,20))
 row2 = cv2.copyMakeBorder(row2,0,0,0,w-row2.shape[1],cv2.BORDER_CONSTANT,value=(20,20,20))
 out = np.vstack([row1,row2])
-cv2.imwrite(os.path.join(TOOLS, "check_montage.jpg"), out)
+cv2.imwrite(OUT, out)
 print("montage:", out.shape)
 for f in files:
     r = st.analyse(f)
