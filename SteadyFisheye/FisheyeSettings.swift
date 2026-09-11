@@ -24,6 +24,9 @@ struct FisheyeParameters {
     var k1: Float
     var k2: Float
     var edgeFeather: Float
+    var sharpness: Float
+    var localContrast: Float
+    var hazeCompensation: Float
 }
 
 final class FisheyeSettings: ObservableObject {
@@ -37,6 +40,12 @@ final class FisheyeSettings: ObservableObject {
     @Published var centerY: Float = 0
     @Published var edgeFeather: Float = 0.025
 
+    // Image finishing controls. These are deliberately conservative because
+    // sharpening cannot recover detail lost to a soft sensor or dirty glass.
+    @Published var sharpness: Float = 0.18
+    @Published var localContrast: Float = 0.10
+    @Published var hazeCompensation: Float = 0.05
+
     func resetLens() {
         projection = .equidistant
         lensHalfFov = 90
@@ -47,6 +56,9 @@ final class FisheyeSettings: ObservableObject {
         centerX = 0
         centerY = 0
         edgeFeather = 0.025
+        sharpness = 0.18
+        localContrast = 0.10
+        hazeCompensation = 0.05
     }
 
     func parameters(sourceSize: CGSize) -> FisheyeParameters {
@@ -73,7 +85,10 @@ final class FisheyeSettings: ObservableObject {
             projection: Float(projection.rawValue),
             k1: k1,
             k2: k2,
-            edgeFeather: max(edgeFeather, 0)
+            edgeFeather: max(edgeFeather, 0),
+            sharpness: min(max(sharpness, 0), 1),
+            localContrast: min(max(localContrast, 0), 1),
+            hazeCompensation: min(max(hazeCompensation, 0), 1)
         )
     }
 }

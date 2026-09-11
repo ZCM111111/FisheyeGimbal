@@ -9,6 +9,7 @@ struct FEUniforms {
     float4 lens0;
     float4 lens1;
     float4 distortion;
+    float4 finishing;
 };
 
 struct FEVertexOut {
@@ -85,7 +86,10 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     float edgeFeather = clamp(u.lens1.w, 0.0, 0.5);
     float k1 = u.distortion.x;
     float k2 = u.distortion.y;
+    float sharpness = clamp(u.distortion.w, 0.0, 1.0);
     uint sourceFormat = uint(max(u.distortion.z, 0.0));
+    float localContrast = clamp(u.finishing.x, 0.0, 1.0);
+    float hazeCompensation = clamp(u.finishing.y, 0.0, 1.0);
 
     // The output is a pinhole camera in locked-camera coordinates.
     float2 pixel = in.uv * viewSize;
@@ -127,6 +131,29 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
 
     float2 sourceUV = sourcePixel / sourceSize;
     float4 color = sampleSource(plane0, plane1, sourceSampler, sourceUV, sourceFormat);
+
+    // Conservative finishing pass. It improves perceived detail after the
+    // fisheye remap, but cannot recreate detail lost to blur or dirty glass.
+    float2 texel = 1.0 / sourceSize;
+    float4 north = sampleSource(plane0, plane1, sourceSampler,
+                                sourceUV + float2(0.0, -texel.y), sourceFormat);
+    float4 south = sampleSource(plane0, plane1, sourceSampler,
+                                sourceUV + float2(0.0, texel.y), sourceFormat);
+    float4 east = sampleSource(plane0, plane1, sourceSampler,
+                               sourceUV + float2(texel.x, 0.0), sourceFormat);
+    float4 west = sampleSource(plane0, plane1, sourceSampler,
+                               sourceUV + float2(-texel.x, 0.0), sourceFormat);
+    float3 blur = (north.rgb + south.rgb + east.rgb + west.rgb) * 0.25;
+    color.rgb += (color.rgb - blur) * (0.75 * sharpness);
+
+    float luminance = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+    color.rgb = mix(color.rgb,
+                    clamp((color.rgb - 0.5) * (1.0 + localContrast) + 0.5,
+                          0.0, 1.0),
+                    localContrast);
+    // Lift local separation in veiled highlights without crushing shadows.
+    float hazeLift = (1.0 - luminance) * 0.08 * hazeCompensation;
+    color.rgb = clamp(color.rgb + hazeLift * (color.rgb - luminance), 0.0, 1.0);
 
     float featherStart = maxRadius * (1.0 - edgeFeather);
     if (edgeFeather > 0.0 && radius > featherStart) {

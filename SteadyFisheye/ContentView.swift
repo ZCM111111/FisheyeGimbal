@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var showControls = false
     @State private var rendererFailed = false
     @State private var baseFov: Float?
+    @State private var panelOffset: CGSize = CGSize(width: 0, height: 76)
+    @State private var dragStartOffset: CGSize?
 
     var body: some View {
         ZStack {
@@ -37,6 +39,27 @@ struct ContentView: View {
                 bottomBar
             }
 
+            if showControls {
+                FloatingControls(settings: settings,
+                                 motion: motion,
+                                 camera: camera,
+                                 dismiss: { withAnimation(.easeOut(duration: 0.2)) { showControls = false } })
+                    .frame(maxWidth: 360)
+                    .padding(.horizontal, 12)
+                    .offset(panelOffset)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if dragStartOffset == nil { dragStartOffset = panelOffset }
+                                let start = dragStartOffset ?? panelOffset
+                                panelOffset = CGSize(width: start.width + value.translation.width,
+                                                     height: start.height + value.translation.height)
+                            }
+                            .onEnded { _ in dragStartOffset = nil }
+                    )
+                    .transition(.scale(scale: 0.96).combined(with: .opacity))
+            }
+
             if rendererFailed {
                 Color.black.opacity(0.9).ignoresSafeArea()
                 VStack(spacing: 10) {
@@ -47,14 +70,6 @@ struct ContentView: View {
                 }
                 .foregroundStyle(.white)
             }
-        }
-        .sheet(isPresented: $showControls) {
-            SettingsSheet(settings: settings,
-                          motion: motion,
-                          camera: camera,
-                          dismiss: { showControls = false })
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
         }
         .onAppear { app.start() }
         .onDisappear { app.stop() }
@@ -115,7 +130,7 @@ struct ContentView: View {
     }
 }
 
-private struct SettingsSheet: View {
+private struct FloatingControls: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
@@ -179,6 +194,16 @@ private struct SettingsSheet: View {
                 }
 
                 Section {
+                    slider("Sharpness", value: $settings.sharpness, range: 0...0.6, suffix: "")
+                    slider("Local contrast", value: $settings.localContrast, range: 0...0.5, suffix: "")
+                    slider("Haze / dirty lens", value: $settings.hazeCompensation, range: 0...0.5, suffix: "")
+                } header: {
+                    Text("Image finish")
+                } footer: {
+                    Text("Use small values. These controls improve perceived clarity but cannot restore detail lost by blur, low light, or dirty glass.")
+                }
+
+                Section {
                     slider("Sensor smoothing", value: Binding(
                         get: { Float(motion.smoothing) },
                         set: { motion.smoothing = Double($0) }
@@ -202,13 +227,15 @@ private struct SettingsSheet: View {
                     Text("More smoothing is steadier but adds delay. Display smoothing removes tiny sample-to-display timing jumps.")
                 }
             }
-            .navigationTitle("SteadyFisheye")
+            .navigationTitle("CONTROL")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: dismiss)
+                    Button("Close", action: dismiss)
                 }
             }
+            .frame(maxHeight: 520)
+            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 

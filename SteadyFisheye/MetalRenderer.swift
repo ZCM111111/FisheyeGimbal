@@ -13,7 +13,10 @@ private struct FEUniforms {
     var sourceView = SIMD4<Float>(1920, 1080, 390, 844)
     var lens0 = SIMD4<Float>(960, 540, 300, 540)
     var lens1 = SIMD4<Float>(1.57, 1.36, 0, 0.02)
-    var distortion = SIMD4<Float>(0, 0, 1, 0)
+    // x/y = radial distortion, z = source format, w = sharpness
+    var distortion = SIMD4<Float>(0, 0, 1, 0.18)
+    // x = local contrast, y = haze compensation
+    var finishing = SIMD4<Float>(0.10, 0.05, 0, 0)
 }
 
 private final class SourceFrame {
@@ -274,7 +277,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             lens1: SIMD4<Float>(parameters.maxTheta, parameters.outputFov,
                                 parameters.projection, parameters.edgeFeather),
             distortion: SIMD4<Float>(parameters.k1, parameters.k2,
-                                     Float(frame.format), 1)
+                                     Float(frame.format), parameters.sharpness),
+            finishing: SIMD4<Float>(parameters.localContrast,
+                                   parameters.hazeCompensation, 0, 0)
         )
     }
 

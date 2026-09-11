@@ -222,10 +222,13 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             func score(_ format: AVCaptureDevice.Format) -> Double {
                 let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
                 let pixels = Double(d.width) * Double(d.height)
-                let targetPixels = 1920.0 * 1080.0
                 let aspect = Double(d.width) / max(Double(d.height), 1)
                 let aspectPenalty = abs(aspect - (16.0 / 9.0)) * 250_000
-                // Prefer near-1080p, then the closest 16:9 format.
+                let targetPixels = selectedLens == .ultraWide
+                    ? 3840.0 * 2160.0
+                    : 1920.0 * 1080.0
+                // iPhone 15 Pro Max can feed the 0.5x lens at 4K60;
+                // use that extra source detail before GPU remapping.
                 return abs(pixels - targetPixels) + aspectPenalty
             }
             return score(lhs) < score(rhs)
