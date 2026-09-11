@@ -77,6 +77,9 @@ final class MotionStabilizer: ObservableObject {
     /// pinned in the middle, and the chase already filters the detector's
     /// frame-to-frame wobble.
     private let aimDeadZone: Float = 0.0004
+    /// Device turn rate in degrees per second, recomputed per motion sample.
+    private var angularRateDegrees: Float = 0
+    private var hasRate = false
     private var samples: [MotionSample] = []
     private let maxSampleCount = 36
     private var filtered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
@@ -392,6 +395,25 @@ final class MotionStabilizer: ObservableObject {
         hasRenderedSample = true
     }
 
+    /// How fast the device is turning, in degrees per second.
+    ///
+    /// The screen detector works on a frame that is already tens of milliseconds
+    /// old, so while the phone is being turned its answer describes a pose that
+    /// has moved on. Using it would tug the picture sideways and then tug it back
+    /// on the next detection — the drag that reads as a spring instead of a lock.
+    func currentAngularRate() -> Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return angularRateDegrees
+    }
+
+    /// True once something has been locked onto.
+    var hasAimTarget: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return aimTargetWorld != nil
+    }
+
     /// Where the frame should be centred, in camera coordinates. Pass nil to
     /// stop chasing anything.
     ///
@@ -485,6 +507,14 @@ final class MotionStabilizer: ObservableObject {
 
         let dt = min(max(timestamp - lastTimestamp, 1.0 / 240.0), 0.25)
         lastTimestamp = timestamp
+        // Turn rate is measured here, before rawAttitude moves on: 2·acos of the
+        // quaternion dot is the angle between the two attitudes.
+        if hasRate {
+            let delta = simd_dot(current.vector, rawAttitude.vector)
+            let turned = 2 * acos(min(abs(delta), 1))          // radians, Float
+            angularRateDegrees = turned / Float(dt) * 180 / .pi
+        }
+        hasRate = true
         rawAttitude = current
         let alpha = smoothingValue <= 0 ? 1 : 1 - exp(-dt / smoothingValue)
         filtered = slerpShortest(filtered, current,
