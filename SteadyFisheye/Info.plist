@@ -22,6 +22,16 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <!-- Without a launch screen declaration iOS assumes the app predates the
+         current screen sizes and runs it letterboxed in a legacy window, which
+         is what put black bars above and below the whole app. An empty
+         UILaunchScreen dictionary opts into the native full screen. -->
+    <key>UILaunchScreen</key>
+    <dict/>
+    <!-- Dark mode keeps the generated launch screen black instead of flashing
+         white before the camera starts. -->
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
     <key>NSCameraUsageDescription</key>
     <string>需要使用相机来实时显示去畸变后的画面。</string>
     <key>NSMotionUsageDescription</key>
