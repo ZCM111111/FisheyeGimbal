@@ -20,6 +20,7 @@ struct FisheyeParameters {
     var maxRadius: Float
     var maxTheta: Float
     var outputFov: Float
+    var travel: Float
     var projection: Float
     var k1: Float
     var k2: Float
@@ -38,6 +39,14 @@ final class FisheyeSettings: ObservableObject {
     @Published var lensHalfFov: Float = 90
     @Published var circleScale: Float = 1.0
     @Published var outputFov: Float = 78
+    /// How far the lock may swing the view away from where the phone points
+    /// before it starts following, in degrees.
+    ///
+    /// This has to be an explicit budget rather than something derived from the
+    /// lens: a frame that fills the whole image circle leaves no room to pan
+    /// before it runs off the glass, so the view size is computed *after*
+    /// reserving this much travel.
+    @Published var lockTravelDegrees: Float = 12
     @Published var k1: Float = 0
     @Published var k2: Float = 0
     @Published var centerX: Float = 0
@@ -78,6 +87,7 @@ final class FisheyeSettings: ObservableObject {
         lensHalfFov = 90
         circleScale = 1.0
         outputFov = 78
+        lockTravelDegrees = 12
         k1 = 0
         k2 = 0
         centerX = 0
@@ -110,6 +120,7 @@ final class FisheyeSettings: ObservableObject {
             maxRadius: radius,
             maxTheta: theta,
             outputFov: max(outputFov, 10) * .pi / 180,
+            travel: min(max(lockTravelDegrees, 3), 30) * .pi / 180,
             projection: Float(projection.rawValue),
             k1: k1,
             k2: k2,

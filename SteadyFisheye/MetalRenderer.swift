@@ -264,11 +264,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let parameters = settings.parameters(sourceSize: CGSize(width: CGFloat(frame.size.x),
                                                                   height: CGFloat(frame.size.y)))
         let snapshot = motion.renderSnapshot(forFrameAt: frame.timestamp)
-        // Keep the lock's travel limit in step with what the lens can actually
-        // cover for the current frame shape. The stabiliser owns the limit
-        // logic; this just measures the geometry.
-        let frameAngle = cornerAngle(parameters: parameters, viewSize: viewSize)
-        motion.setTravelLimit(max(parameters.maxTheta - frameAngle - 0.03, 0.05))
+        // The lock may swing the view by exactly the reserved travel budget.
+        // The frame is already sized to leave that much clearance inside the
+        // lens, so the view can be held for the whole range without ever
+        // sampling past the rim.
+        motion.setTravelLimit(parameters.travel)
         let matrix = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
         let columns = matrix.columns
 
@@ -286,7 +286,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                      Float(frame.format), parameters.sharpness),
             finishing: SIMD4<Float>(parameters.localContrast,
                                    parameters.hazeCompensation,
-                                   settings.fillScreen ? 1 : 0, 0)
+                                   settings.fillScreen ? 1 : 0,
+                                   parameters.travel)
         )
     }
 
@@ -318,7 +319,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let halfHeight = Float(viewSize.height) * 0.5
         let cornerRadius = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
         let requested = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta = min(parameters.maxTheta, 1.36)
+        let cornerTheta = min(max(parameters.maxTheta - parameters.travel, 0.09), 1.36)
         let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
         let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
         return atan(cornerRadius / max(focalOut, 0.001))
@@ -334,7 +335,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let halfHeight = Float(viewSize.height) * 0.5
         let maxTheta = max(parameters.maxTheta, 0.01)
         let requestedFocal = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta = min(maxTheta, 1.36)
+        let cornerTheta = min(max(maxTheta - parameters.travel, 0.09), 1.36)
         let cornerFocal = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
             / max(tan(cornerTheta), 0.001)
         let focalOut = settings.fillScreen ? max(requestedFocal, cornerFocal) : requestedFocal
