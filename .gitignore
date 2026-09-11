@@ -1,0 +1,14 @@
+# Xcode
+.DS_Store
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Signing and local secrets
+*.mobileprovision
+*.p12
+.env
+
+# Codemagic outputs
+out/

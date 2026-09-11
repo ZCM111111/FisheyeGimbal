@@ -1,0 +1,52 @@
+workflows:
+  ios-unsigned:
+    name: SteadyFisheye unsigned iOS build
+    max_build_duration: 40
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: 16.4
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+
+    scripts:
+      - name: Show build environment
+        script: |
+          set -e
+          xcodebuild -version
+          xcodebuild -project SteadyFisheye.xcodeproj -list
+      - name: Build without signing
+        script: |
+          set -e
+          xcodebuild \
+            -project SteadyFisheye.xcodeproj \
+            -scheme SteadyFisheye \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM='' \
+            PROVISIONING_PROFILE_SPECIFIER='' \
+            clean build
+      - name: Package unsigned IPA
+        script: |
+          set -e
+          app_path=$(find build/Build/Products -maxdepth 3 -name 'SteadyFisheye.app' -type d | head -1)
+          test -n "$app_path"
+          mkdir -p out/Payload
+          cp -R "$app_path" out/Payload/
+          (cd out && zip -qr SteadyFisheye-unsigned.ipa Payload)
+          shasum -a 256 out/SteadyFisheye-unsigned.ipa
+
+    artifacts:
+      - out/SteadyFisheye-unsigned.ipa
+      - build/Build/Products/**/*.app

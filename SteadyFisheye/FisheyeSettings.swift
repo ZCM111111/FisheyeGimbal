@@ -1,0 +1,79 @@
+import Foundation
+import SwiftUI
+
+enum FisheyeProjection: Int, CaseIterable, Identifiable {
+    case equidistant = 0
+    case equisolid = 1
+
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .equidistant: return "Equidistant"
+        case .equisolid: return "Equisolid"
+        }
+    }
+}
+
+struct FisheyeParameters {
+    var center: SIMD2<Float>
+    var focal: Float
+    var maxRadius: Float
+    var maxTheta: Float
+    var outputFov: Float
+    var projection: Float
+    var k1: Float
+    var k2: Float
+    var edgeFeather: Float
+}
+
+final class FisheyeSettings: ObservableObject {
+    @Published var projection: FisheyeProjection = .equidistant
+    @Published var lensHalfFov: Float = 90
+    @Published var circleScale: Float = 1.0
+    @Published var outputFov: Float = 78
+    @Published var k1: Float = 0
+    @Published var k2: Float = 0
+    @Published var centerX: Float = 0
+    @Published var centerY: Float = 0
+    @Published var edgeFeather: Float = 0.025
+
+    func resetLens() {
+        projection = .equidistant
+        lensHalfFov = 90
+        circleScale = 1.0
+        outputFov = 78
+        k1 = 0
+        k2 = 0
+        centerX = 0
+        centerY = 0
+        edgeFeather = 0.025
+    }
+
+    func parameters(sourceSize: CGSize) -> FisheyeParameters {
+        let width = max(Float(sourceSize.width), 1)
+        let height = max(Float(sourceSize.height), 1)
+        let shortSide = min(width, height)
+        let radius = max(shortSide * 0.5 * circleScale, 1)
+        let theta = max(lensHalfFov, 1) * .pi / 180
+        let focal: Float
+        switch projection {
+        case .equidistant:
+            focal = radius / theta
+        case .equisolid:
+            focal = radius / max(2 * sin(theta * 0.5), 0.001)
+        }
+
+        return FisheyeParameters(
+            center: SIMD2<Float>(width * 0.5 + centerX * shortSide,
+                                height * 0.5 + centerY * shortSide),
+            focal: focal,
+            maxRadius: radius,
+            maxTheta: theta,
+            outputFov: max(outputFov, 10) * .pi / 180,
+            projection: Float(projection.rawValue),
+            k1: k1,
+            k2: k2,
+            edgeFeather: max(edgeFeather, 0)
+        )
+    }
+}

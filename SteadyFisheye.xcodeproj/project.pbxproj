@@ -1,0 +1,262 @@
+// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {
+    };
+    objectVersion = 56;
+    objects = {
+
+/* Begin PBXBuildFile section */
+        B10000000000000000000001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* App.swift */; };
+        B10000000000000000000002 /* CameraService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* CameraService.swift */; };
+        B10000000000000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* ContentView.swift */; };
+        B10000000000000000000004 /* FisheyeSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* FisheyeSettings.swift */; };
+        B10000000000000000000005 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* MetalRenderer.swift */; };
+        B10000000000000000000006 /* MotionStabilizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* MotionStabilizer.swift */; };
+        B10000000000000000000007 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* Shaders.metal */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+        A10000000000000000000001 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+        A10000000000000000000002 /* CameraService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraService.swift; sourceTree = "<group>"; };
+        A10000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+        A10000000000000000000004 /* FisheyeSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FisheyeSettings.swift; sourceTree = "<group>"; };
+        A10000000000000000000005 /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
+        A10000000000000000000006 /* MotionStabilizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionStabilizer.swift; sourceTree = "<group>"; };
+        A10000000000000000000007 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+        A10000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+        A10000000000000000000009 /* SteadyFisheye.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SteadyFisheye.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+        C10000000000000000000002 /* Frameworks */ = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+        C10000000000000000000001 = {
+            isa = PBXGroup;
+            children = (
+                C10000000000000000000004 /* SteadyFisheye */,
+                C10000000000000000000003 /* Products */,
+            );
+            sourceTree = "<group>";
+        };
+        C10000000000000000000003 /* Products */ = {
+            isa = PBXGroup;
+            children = (
+                A10000000000000000000009 /* SteadyFisheye.app */,
+            );
+            name = Products;
+            sourceTree = "<group>";
+        };
+        C10000000000000000000004 /* SteadyFisheye */ = {
+            isa = PBXGroup;
+            children = (
+                A10000000000000000000001 /* App.swift */,
+                A10000000000000000000002 /* CameraService.swift */,
+                A10000000000000000000003 /* ContentView.swift */,
+                A10000000000000000000004 /* FisheyeSettings.swift */,
+                A10000000000000000000005 /* MetalRenderer.swift */,
+                A10000000000000000000006 /* MotionStabilizer.swift */,
+                A10000000000000000000007 /* Shaders.metal */,
+                A10000000000000000000008 /* Info.plist */,
+            );
+            path = SteadyFisheye;
+            sourceTree = "<group>";
+        };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+        D10000000000000000000001 /* SteadyFisheye */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = F10000000000000000000002 /* Build configuration list for PBXNativeTarget "SteadyFisheye" */;
+            buildPhases = (
+                C10000000000000000000005 /* Sources */,
+                C10000000000000000000002 /* Frameworks */,
+                C10000000000000000000006 /* Resources */,
+            );
+            buildRules = (
+            );
+            dependencies = (
+            );
+            name = SteadyFisheye;
+            productName = SteadyFisheye;
+            productReference = A10000000000000000000009 /* SteadyFisheye.app */;
+            productType = "com.apple.product-type.application";
+        };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+        D10000000000000000000002 /* Project object */ = {
+            isa = PBXProject;
+            attributes = {
+                BuildIndependentTargetsInParallel = 1;
+                LastSwiftUpdateCheck = 1500;
+                LastUpgradeCheck = 1500;
+                TargetAttributes = {
+                    D10000000000000000000001 = {
+                        CreatedOnToolsVersion = 15.0;
+                    };
+                };
+            };
+            buildConfigurationList = F10000000000000000000001 /* Build configuration list for PBXProject "SteadyFisheye" */;
+            compatibilityVersion = "Xcode 14.0";
+            developmentRegion = en;
+            hasScannedForEncodings = 0;
+            knownRegions = (
+                en,
+                Base,
+            );
+            mainGroup = C10000000000000000000001;
+            productRefGroup = C10000000000000000000003 /* Products */;
+            projectDirPath = "";
+            projectRoot = "";
+            targets = (
+                D10000000000000000000001 /* SteadyFisheye */,
+            );
+        };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+        C10000000000000000000006 /* Resources */ = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+        C10000000000000000000005 /* Sources */ = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+                B10000000000000000000001 /* App.swift in Sources */,
+                B10000000000000000000002 /* CameraService.swift in Sources */,
+                B10000000000000000000003 /* ContentView.swift in Sources */,
+                B10000000000000000000004 /* FisheyeSettings.swift in Sources */,
+                B10000000000000000000005 /* MetalRenderer.swift in Sources */,
+                B10000000000000000000006 /* MotionStabilizer.swift in Sources */,
+                B10000000000000000000007 /* Shaders.metal in Sources */,
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+        F10000000000000000000003 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ALWAYS_SEARCH_USER_PATHS = NO;
+                CLANG_ENABLE_MODULES = YES;
+                CLANG_ENABLE_OBJC_ARC = YES;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEBUG_INFORMATION_FORMAT = dwarf;
+                ENABLE_TESTABILITY = YES;
+                GCC_C_LANGUAGE_STANDARD = gnu17;
+                IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+                MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+                MTL_FAST_MATH = YES;
+                ONLY_ACTIVE_ARCH = YES;
+                SDKROOT = iphoneos;
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+                SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = 1;
+            };
+            name = Debug;
+        };
+        F10000000000000000000004 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ALWAYS_SEARCH_USER_PATHS = NO;
+                CLANG_ENABLE_MODULES = YES;
+                CLANG_ENABLE_OBJC_ARC = YES;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+                ENABLE_NS_ASSERTIONS = NO;
+                GCC_C_LANGUAGE_STANDARD = gnu17;
+                IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+                MTL_ENABLE_DEBUG_INFO = NO;
+                MTL_FAST_MATH = YES;
+                SDKROOT = iphoneos;
+                SWIFT_COMPILATION_MODE = wholemodule;
+                SWIFT_OPTIMIZATION_LEVEL = "-O";
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = 1;
+                VALIDATE_PRODUCT = YES;
+            };
+            name = Release;
+        };
+        F10000000000000000000005 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = SteadyFisheye/Info.plist;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/Frameworks",
+                );
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = com.example.steadyfisheye;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_EMIT_LOC_STRINGS = YES;
+                TARGETED_DEVICE_FAMILY = 1;
+            };
+            name = Debug;
+        };
+        F10000000000000000000006 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = SteadyFisheye/Info.plist;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/Frameworks",
+                );
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = com.example.steadyfisheye;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_EMIT_LOC_STRINGS = YES;
+                TARGETED_DEVICE_FAMILY = 1;
+            };
+            name = Release;
+        };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+        F10000000000000000000001 /* Build configuration list for PBXProject "SteadyFisheye" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (
+                F10000000000000000000003 /* Debug */,
+                F10000000000000000000004 /* Release */,
+            );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Release;
+        };
+        F10000000000000000000002 /* Build configuration list for PBXNativeTarget "SteadyFisheye" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (
+                F10000000000000000000005 /* Debug */,
+                F10000000000000000000006 /* Release */,
+            );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Release;
+        };
+/* End XCConfigurationList section */
+    };
+    rootObject = D10000000000000000000002 /* Project object */;
+}
