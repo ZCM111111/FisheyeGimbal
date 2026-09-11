@@ -15,6 +15,9 @@ enum LensCircleMeasurer {
         let width: Int
         let height: Int
         let lum: [Float]
+        /// Pixel size of the frame this grid was decimated from, so a measured
+        /// point can be turned back into a source coordinate.
+        let sourceSize: CGSize
 
         func sample(_ x: Float, _ y: Float) -> Float? {
             guard x >= 0, y >= 0, x <= Float(width - 1), y <= Float(height - 1) else {
@@ -79,7 +82,11 @@ enum LensCircleMeasurer {
                 }
             }
         }
-        return LumaGrid(width: width, height: height, lum: lum)
+        return LumaGrid(width: width,
+                        height: height,
+                        lum: lum,
+                        sourceSize: CGSize(width: CGFloat(sourceWidth),
+                                           height: CGFloat(sourceHeight)))
     }
 
     static func measure(grid: LumaGrid) -> Result {

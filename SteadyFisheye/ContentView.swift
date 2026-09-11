@@ -109,6 +109,9 @@ struct ContentView: View {
                                      centering: app.isCentering,
                                      centerReport: app.centerReport,
                                      onCenter: { app.centerLens() },
+                                     aligning: app.isAligning,
+                                     alignReport: app.alignReport,
+                                     onAlign: { app.alignToCabinet() },
                                      dismiss: {
                                          withAnimation(.easeOut(duration: 0.2)) {
                                              showControls = false

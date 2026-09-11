@@ -200,13 +200,25 @@ final class MotionStabilizer: ObservableObject {
     ///
     /// Must be called with `lock` held.
     private func levelLockedAttitude(from attitude: simd_quatf) -> simd_quatf {
+        levelLockedAttitude(from: attitude, cameraDirection: nil)
+    }
+
+    private func levelLockedAttitude(from attitude: simd_quatf,
+                                     cameraDirection: SIMD3<Float>?) -> simd_quatf {
         let gravityWorld = attitude.act(gravityFiltered)
         let gravityLength = simd_length(gravityWorld)
         guard gravityLength > 0.05, hasGravity else { return attitude }
         let vertical = gravityWorld / gravityLength
 
         let cameraToWorld = simd_float3x3(attitude) * cameraToDevice
-        var forward = cameraToWorld * SIMD3<Float>(0, 0, 1)
+        var forward: SIMD3<Float>
+        if let direction = cameraDirection {
+            // The view is being aimed at something seen off-axis: that ray, not
+            // the optical axis, has to become the centre of the frame.
+            forward = cameraToWorld * (cameraToDevice * direction)
+        } else {
+            forward = cameraToWorld * SIMD3<Float>(0, 0, 1)
+        }
         let forwardLength = simd_length(forward)
         guard forwardLength > 0.05 else { return attitude }
         forward /= forwardLength
@@ -326,6 +338,33 @@ final class MotionStabilizer: ObservableObject {
             hasRenderedSample = true
         }
         lock.unlock()
+    }
+
+    /// Re-aims the lock so a direction seen off-axis becomes the centre of the
+    /// frame, with the horizon kept level.
+    ///
+    /// This is the live equivalent of dragging a viewport back to the middle in
+    /// post production: one rotation assignment instead of keyframes.
+    func reLock(lookingAlong cameraDirection: SIMD3<Float>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard hasSample, simd_length(cameraDirection) > 0.01 else { return }
+        lockedQuaternion = levelLockedAttitude(from: filtered,
+                                               cameraDirection: cameraDirection)
+        lockVersion &+= 1
+        let identity = identityQuaternion()
+        latest.relativeDeviceQuaternion = identity
+        latest.cameraFromLocked = matrix_identity_float3x3
+        latest.lockVersion = lockVersion
+        latest.valid = true
+        samples.removeAll(keepingCapacity: true)
+        samples.append(MotionSample(timestamp: lastTimestamp,
+                                    quaternion: identity,
+                                    lockVersion: lockVersion))
+        renderQuaternion = identity
+        renderVersion = lockVersion
+        lastRenderedSampleTime = lastTimestamp
+        hasRenderedSample = true
     }
 
     func setMode(_ newMode: Mode) {

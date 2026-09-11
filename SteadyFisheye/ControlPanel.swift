@@ -12,6 +12,9 @@ struct ControlPanel: View {
     let centering: Bool
     let centerReport: String?
     let onCenter: () -> Void
+    let aligning: Bool
+    let alignReport: String?
+    let onAlign: () -> Void
     let dismiss: () -> Void
 
     @State private var showGeometry = true
@@ -145,6 +148,41 @@ struct ControlPanel: View {
                       selection: Binding(
                         get: { motion.mode },
                         set: { motion.setMode($0) }))
+
+            // Alignment, not lens correction: a wide lens stretches anything
+            // away from the middle, so the cabinet has to sit on the axis.
+            Button(action: onAlign) {
+                HStack(spacing: Theme.sp2) {
+                    if aligning {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "viewfinder")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Text(aligning ? "正在找机台…" : "对准机台")
+                        .font(Theme.label(12))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .foregroundColor(aligning ? Theme.textSecondary : Theme.onAccent)
+                .padding(.horizontal, Theme.sp3)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
+                .background(aligning ? Theme.surface2 : Theme.accent,
+                            in: RoundedRectangle(cornerRadius: Theme.rBase))
+            }
+            .buttonStyle(.plain)
+            .disabled(aligning)
+
+            if let report = alignReport {
+                Text(report)
+                    .font(Theme.label(10))
+                    .tracking(0.2)
+                    .foregroundColor(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

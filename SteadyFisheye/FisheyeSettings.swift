@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import simd
 
 enum FisheyeProjection: Int, CaseIterable, Identifiable {
     case equidistant = 0
@@ -159,6 +160,40 @@ final class FisheyeSettings: ObservableObject {
     /// tap away from being undone.
     private var previousCenter: (Float, Float)?
     @Published private(set) var hasCenterUndo = false
+
+    /// Direction, in camera coordinates (+X right, +Y down, +Z out of the back
+    /// camera), of the ray that lands on a given source pixel.
+    ///
+    /// This is the inverse of the shader's mapping, so a point measured in the
+    /// raw frame can be turned into the direction the view has to look along to
+    /// put it in the middle.
+    func cameraDirection(forSourcePixel pixel: SIMD2<Float>,
+                         sourceSize: CGSize) -> SIMD3<Float>? {
+        let parameters = parameters(sourceSize: sourceSize)
+        let offset = pixel - parameters.center
+        let radius = simd_length(offset)
+        guard radius > 1, radius.isFinite else { return nil }
+
+        // Undo the radial distortion, then the projection.
+        let normalized = radius / max(parameters.maxRadius, 1)
+        let factor = 1 + parameters.k1 * normalized * normalized
+            + parameters.k2 * normalized * normalized * normalized * normalized
+        let modelRadius = radius / max(factor, 0.25)
+
+        let theta: Float
+        if parameters.projection < 0.5 {
+            theta = modelRadius / max(parameters.focal, 1)
+        } else {
+            let ratio = min(max(modelRadius / (2 * max(parameters.focal, 1)), -1), 1)
+            theta = 2 * asin(ratio)
+        }
+        guard theta.isFinite, theta < 1.5 else { return nil }
+
+        let direction = offset / radius
+        return SIMD3<Float>(sin(theta) * direction.x,
+                            sin(theta) * direction.y,
+                            cos(theta))
+    }
 
     /// Applies a measured circle centre. Only these two values are touched, so
     /// a measurement can never disturb the distortion terms that were tuned by

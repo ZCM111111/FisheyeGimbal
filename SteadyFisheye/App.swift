@@ -60,6 +60,45 @@ final class CameraApp: ObservableObject {
         }
     }
 
+    @Published private(set) var isAligning = false
+    @Published private(set) var alignReport: String?
+
+    /// Finds the cabinet in the frame and re-aims the lock so it sits in the
+    /// middle.
+    ///
+    /// Alignment, not distortion correction: a wide lens stretches whatever is
+    /// away from the centre, so an off-centre cabinet looks distorted however
+    /// round its screen is. Centring it is what removes that.
+    func alignToCabinet() {
+        guard !isAligning, started else { return }
+        isAligning = true
+        alignReport = nil
+
+        camera.requestLumaGrid { [weak self] grid in
+            // Only the detection runs off the main thread: it is pure CPU work
+            // over a local grid, with no shared state.
+            let result = grid.map { CabinetDetector.detect(grid: $0) }
+            let sourceSize = grid?.sourceSize
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isAligning = false
+                guard let result = result, let sourceSize = sourceSize else {
+                    self.alignReport = "读不到画面，确认相机在出图"
+                    return
+                }
+                guard result.found,
+                      let direction = self.settings.cameraDirection(
+                        forSourcePixel: result.centerPixel,
+                        sourceSize: sourceSize) else {
+                    self.alignReport = result.summary
+                    return
+                }
+                self.motion.reLock(lookingAlong: direction)
+                self.alignReport = "已对准 · " + result.summary
+            }
+        }
+    }
+
     func start() {
         guard !started else { return }
         started = true
