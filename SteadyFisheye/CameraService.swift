@@ -4,7 +4,10 @@ import CoreMedia
 import CoreVideo
 import QuartzCore
 
-final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class CameraService: NSObject, ObservableObject,
+                           AVCaptureVideoDataOutputSampleBufferDelegate,
+                           AVCaptureAudioDataOutputSampleBufferDelegate {
+
     enum Lens: String, CaseIterable, Identifiable {
         case wide
         case ultraWide
@@ -28,7 +31,8 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     let session = AVCaptureSession()
 
     /// Settings the asset writer needs for the microphone, or nil when there is
-    /// no usable audio input.
+    /// no usable audio input. Backed by `audioSettings`, which is written once
+    /// during configuration on the session queue.
     var audioWriterSettings: [String: Any]? { audioSettings }
 
     /// Delivers captured audio to the recorder.
@@ -436,7 +440,7 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                 session.addOutput(audioOutput)
                 microphoneInput = audioInput
                 self.audioOutput = audioOutput
-                audioWriterSettings = audioOutput.recommendedAudioSettingsForAssetWriter(
+                audioSettings = audioOutput.recommendedAudioSettingsForAssetWriter(
                     writingTo: .mp4)
             }
         }

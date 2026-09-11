@@ -147,8 +147,12 @@ struct ContentView: View {
             // user is framing a shot.
             UIApplication.shared.isIdleTimerDisabled = true
             // Audio from the capture pipeline goes straight into the recorder.
+            // Hopped to the main thread because all recorder state lives there,
+            // and appending from the audio queue would race with stop().
             camera.onAudioSample = { [weak recorder] buffer in
-                recorder?.appendAudio(buffer)
+                DispatchQueue.main.async {
+                    recorder?.appendAudio(buffer)
+                }
             }
             app.start()
         }
