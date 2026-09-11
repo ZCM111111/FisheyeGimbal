@@ -211,14 +211,19 @@ final class MotionStabilizer: ObservableObject {
         let vertical = gravityWorld / gravityLength
 
         let cameraToWorld = simd_float3x3(attitude) * cameraToDevice
-        var forward: SIMD3<Float>
-        if let direction = cameraDirection {
-            // The view is being aimed at something seen off-axis: that ray, not
-            // the optical axis, has to become the centre of the frame.
-            forward = cameraToWorld * (cameraToDevice * direction)
-        } else {
-            forward = cameraToWorld * SIMD3<Float>(0, 0, 1)
-        }
+        // Camera coordinates are +X right, +Y down, +Z along the optical axis,
+        // and `cameraToWorld` already carries the camera-to-device flip — so the
+        // aim vector must go through it exactly once, the same way the plain
+        // optical axis does.
+        //
+        // It used to be multiplied by `cameraToDevice` an extra time, which
+        // cancels the flip and reads a camera-frame ray as a device-frame one:
+        // straight ahead (0, 0, 1) then meant "at the user", so the lock ended up
+        // aimed roughly backwards, the renderer sampled past the lens rim and
+        // pinned every pixel to it, and the frame smeared into radial streaks
+        // the moment anything was detected. The axis-only path never had the
+        // error, which is why the preview looked normal until then.
+        var forward = cameraToWorld * (cameraDirection ?? SIMD3<Float>(0, 0, 1))
         let forwardLength = simd_length(forward)
         guard forwardLength > 0.05 else { return attitude }
         forward /= forwardLength
