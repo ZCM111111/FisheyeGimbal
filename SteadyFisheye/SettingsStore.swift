@@ -16,6 +16,7 @@ struct LensProfile: Codable {
     var centerY: Float = 0
     var edgeFeather: Float = 0.025
     var fillScreen: Bool = true
+    var showGrid: Bool = false
     var sharpness: Float = 0.18
     var localContrast: Float = 0.10
     var hazeCompensation: Float = 0.05

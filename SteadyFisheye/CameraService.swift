@@ -77,18 +77,6 @@ final class CameraService: NSObject, ObservableObject,
 
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
-    private var pendingCalibration: ((AutoCalibrator.LumaGrid?) -> Void)?
-    private let calibrationLock = NSLock()
-
-    /// Asks for one frame for auto-calibration. The handler runs off the main
-    /// thread with a decimated luminance grid, or nil if the frame could not be
-    /// read.
-    func requestCalibrationGrid(_ handler: @escaping (AutoCalibrator.LumaGrid?) -> Void) {
-        calibrationLock.lock()
-        pendingCalibration = handler
-        calibrationLock.unlock()
-    }
-
     private let sessionQueue = DispatchQueue(label: "steadyfisheye.camera.session",
                                               qos: .userInitiated)
     private let videoQueue = DispatchQueue(label: "steadyfisheye.camera.video",
@@ -575,21 +563,6 @@ final class CameraService: NSObject, ObservableObject,
             }
         }
         lastFrameTimestamp = captureTime
-
-        // One-shot hand-off for auto-calibration. The frame is decimated right
-        // here, while the buffer is still valid, so nothing holds a pool buffer
-        // across frames and the capture pipeline never stalls.
-        calibrationLock.lock()
-        let pending = pendingCalibration
-        pendingCalibration = nil
-        calibrationLock.unlock()
-        if let pending = pending {
-            let grid = AutoCalibrator.makeGrid(from: pixelBuffer)
-            DispatchQueue.global(qos: .userInitiated).async {
-                pending(grid)
-            }
-        }
-
         onFrame?(pixelBuffer, captureTime)
     }
 }

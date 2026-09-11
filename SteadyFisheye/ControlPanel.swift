@@ -9,14 +9,11 @@ struct ControlPanel: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
-    let autoCalibrating: Bool
-    let calibrationReport: String?
-    let onAutoCalibrate: () -> Void
     let dismiss: () -> Void
 
     @State private var showGeometry = true
-    @State private var showFinish = true
-    @State private var showCalibration = false
+    @State private var showFinish = false
+    @State private var showCalibration = true
     @State private var showStabilization = false
 
     var body: some View {
@@ -28,11 +25,10 @@ struct ControlPanel: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: Theme.sp5) {
                     telemetry
-                    autoCalibration
                     cameraGroup
                     geometryGroup
-                    finishGroup
                     calibrationGroup
+                    finishGroup
                     stabilizationGroup
                 }
                 .padding(.horizontal, Theme.sp4)
@@ -124,45 +120,6 @@ struct ControlPanel: View {
         .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
     }
 
-    // MARK: - One-tap calibration
-
-    /// The primary action. Measuring the lens beats asking the user to guess
-    /// distortion coefficients, so this sits above everything else.
-    private var autoCalibration: some View {
-        VStack(alignment: .leading, spacing: Theme.sp2) {
-            Button(action: onAutoCalibrate) {
-                HStack(spacing: Theme.sp2) {
-                    if autoCalibrating {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .frame(width: 14, height: 14)
-                    } else {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    Text(autoCalibrating ? "正在标定…" : "一键自动标定")
-                        .font(Theme.label(13))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .foregroundColor(autoCalibrating ? Theme.textSecondary : Theme.onAccent)
-                .padding(.horizontal, Theme.sp3)
-                .frame(maxWidth: .infinity)
-                .frame(height: 38)
-                .background(autoCalibrating ? Theme.surface2 : Theme.accent,
-                            in: RoundedRectangle(cornerRadius: Theme.rBase))
-            }
-            .buttonStyle(.plain)
-            .disabled(autoCalibrating)
-
-            Text(calibrationReport ?? "对着有长直线的场景（门框、桌沿、屏幕边框）按一下，自动测成像圈与畸变。")
-                .font(Theme.label(10))
-                .tracking(0.2)
-                .foregroundColor(calibrationReport == nil ? Theme.textTertiary : Theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     // MARK: - Groups
 
     private var cameraGroup: some View {
@@ -226,8 +183,36 @@ struct ControlPanel: View {
     }
 
     private var calibrationGroup: some View {
-        PanelSection(title: "手动微调", expanded: $showCalibration) {
+        PanelSection(title: "镜头标定", expanded: $showCalibration) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
+                Text("打开参考网格，对着门框或桌沿之类有长直线的地方，把它和网格线对齐来看。")
+                    .font(Theme.label(10))
+                    .tracking(0.2)
+                    .foregroundColor(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    settings.showGrid.toggle()
+                } label: {
+                    HStack(spacing: Theme.sp2) {
+                        Image(systemName: settings.showGrid ? "grid" : "grid.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(settings.showGrid ? "参考网格已开" : "打开参考网格")
+                            .font(Theme.label(12))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundColor(settings.showGrid ? Theme.onAccent : Theme.textSecondary)
+                    .padding(.horizontal, Theme.sp3)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background(settings.showGrid ? Theme.accent : Theme.surface2,
+                                in: RoundedRectangle(cornerRadius: Theme.rBase))
+                }
+                .buttonStyle(.plain)
+
+                // Straight lines that still bow are the symptom; these two terms
+                // are what straighten them.
                 IndustrialSlider(title: "径向 K1", unit: "", digits: 3,
                                  value: $settings.k1, range: -0.35...0.35)
                 IndustrialSlider(title: "径向 K2", unit: "", digits: 3,

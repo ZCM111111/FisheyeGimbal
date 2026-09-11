@@ -17,7 +17,6 @@
         B20000000000000000000001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* Theme.swift */; };
         B20000000000000000000002 /* PanelComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* PanelComponents.swift */; };
         B20000000000000000000003 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* ControlPanel.swift */; };
-        B20000000000000000000004 /* AutoCalibrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* AutoCalibrator.swift */; };
         B20000000000000000000005 /* FocusControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* FocusControls.swift */; };
         B20000000000000000000006 /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* VideoRecorder.swift */; };
         B20000000000000000000007 /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* ActivityView.swift */; };
@@ -38,7 +37,6 @@
         A20000000000000000000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
         A20000000000000000000002 /* PanelComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelComponents.swift; sourceTree = "<group>"; };
         A20000000000000000000003 /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
-        A20000000000000000000004 /* AutoCalibrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCalibrator.swift; sourceTree = "<group>"; };
         A20000000000000000000005 /* FocusControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusControls.swift; sourceTree = "<group>"; };
         A20000000000000000000006 /* VideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorder.swift; sourceTree = "<group>"; };
         A20000000000000000000007 /* ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityView.swift; sourceTree = "<group>"; };
@@ -85,7 +83,6 @@
                 A20000000000000000000001 /* Theme.swift */,
                 A20000000000000000000002 /* PanelComponents.swift */,
                 A20000000000000000000003 /* ControlPanel.swift */,
-                A20000000000000000000004 /* AutoCalibrator.swift */,
                 A20000000000000000000005 /* FocusControls.swift */,
                 A20000000000000000000006 /* VideoRecorder.swift */,
                 A20000000000000000000007 /* ActivityView.swift */,
@@ -175,7 +172,6 @@
                 B20000000000000000000001 /* Theme.swift in Sources */,
                 B20000000000000000000002 /* PanelComponents.swift in Sources */,
                 B20000000000000000000003 /* ControlPanel.swift in Sources */,
-                B20000000000000000000004 /* AutoCalibrator.swift in Sources */,
                 B20000000000000000000005 /* FocusControls.swift in Sources */,
                 B20000000000000000000006 /* VideoRecorder.swift in Sources */,
                 B20000000000000000000007 /* ActivityView.swift in Sources */,

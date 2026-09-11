@@ -55,6 +55,14 @@ struct ContentView: View {
                         .onEnded { _ in baseFov = nil }
                 )
 
+            // Straight screen-space lines to judge real edges against while
+            // calibrating by hand.
+            if settings.showGrid {
+                ReferenceGrid()
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+
             // Focus reticle and exposure slider, drawn straight over the frame
             // the way the system camera does it.
             if let point = focusPoint {
@@ -98,9 +106,6 @@ struct ContentView: View {
                         ControlPanel(settings: settings,
                                      motion: motion,
                                      camera: camera,
-                                     autoCalibrating: app.isCalibrating,
-                                     calibrationReport: app.calibrationReport,
-                                     onAutoCalibrate: { app.runAutoCalibration() },
                                      dismiss: {
                                          withAnimation(.easeOut(duration: 0.2)) {
                                              showControls = false
@@ -469,8 +474,44 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Metal preview host
+/// Straight screen-space lines drawn over the preview.
+///
+/// Manual calibration means judging by eye whether a real edge came out
+/// straight, which is unreliable without something straight to compare it to.
+private struct ReferenceGrid: View {
+    var body: some View {
+        Canvas { context, size in
+            var thin = Path()
+            let columns = 6
+            let rows = 10
+            for index in 1..<columns {
+                let x = size.width * CGFloat(index) / CGFloat(columns)
+                thin.move(to: CGPoint(x: x, y: 0))
+                thin.addLine(to: CGPoint(x: x, y: size.height))
+            }
+            for index in 1..<rows {
+                let y = size.height * CGFloat(index) / CGFloat(rows)
+                thin.move(to: CGPoint(x: 0, y: y))
+                thin.addLine(to: CGPoint(x: size.width, y: y))
+            }
+            context.stroke(thin,
+                           with: .color(Theme.accent.opacity(0.30)),
+                           lineWidth: 0.5)
 
+            // Centre cross, for lining the optical axis up against.
+            var cross = Path()
+            cross.move(to: CGPoint(x: size.width / 2, y: size.height * 0.2))
+            cross.addLine(to: CGPoint(x: size.width / 2, y: size.height * 0.8))
+            cross.move(to: CGPoint(x: 0, y: size.height / 2))
+            cross.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+            context.stroke(cross,
+                           with: .color(Theme.accent.opacity(0.55)),
+                           lineWidth: 1)
+        }
+    }
+}
+
+// MARK: - Metal preview host
 private struct MetalPreview: UIViewRepresentable {
     let camera: CameraService
     let settings: FisheyeSettings

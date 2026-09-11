@@ -91,6 +91,7 @@ final class FisheyeSettings: ObservableObject {
                     centerY: centerY,
                     edgeFeather: edgeFeather,
                     fillScreen: fillScreen,
+                    showGrid: showGrid,
                     sharpness: sharpness,
                     localContrast: localContrast,
                     hazeCompensation: hazeCompensation)
@@ -107,6 +108,7 @@ final class FisheyeSettings: ObservableObject {
         centerY = profile.centerY
         edgeFeather = profile.edgeFeather
         fillScreen = profile.fillScreen
+        showGrid = profile.showGrid
         sharpness = profile.sharpness
         localContrast = profile.localContrast
         hazeCompensation = profile.hazeCompensation
@@ -140,28 +142,18 @@ final class FisheyeSettings: ObservableObject {
     /// edge, which fits the widest view but leaves black bars above/below.
     @Published var fillScreen: Bool = true
 
+    /// Screen-space reference grid over the preview.
+    ///
+    /// Calibration is manual, and judging whether a real edge is straight by eye
+    /// is unreliable. A fixed straight grid to compare against turns it into
+    /// something you can actually see.
+    @Published var showGrid: Bool = false
+
     // Image finishing controls. These are deliberately conservative because
     // sharpening cannot recover detail lost to a soft sensor or dirty glass.
     @Published var sharpness: Float = 0.18
     @Published var localContrast: Float = 0.10
     @Published var hazeCompensation: Float = 0.05
-
-    /// Writes an automatic calibration back into the live parameters.
-    ///
-    /// Circle geometry is always taken, because it is measured rather than
-    /// fitted. The distortion terms are only replaced when the fit genuinely
-    /// straightened the picture, so a failed calibration cannot make things
-    /// worse than the user's current settings.
-    func apply(_ outcome: AutoCalibrator.Outcome) {
-        if outcome.circleFound {
-            centerX = min(max(outcome.centerX, -0.25), 0.25)
-            centerY = min(max(outcome.centerY, -0.25), 0.25)
-            circleScale = min(max(outcome.circleScale, 0.4), 1.6)
-        }
-        guard outcome.applied else { return }
-        k1 = min(max(outcome.k1, -0.35), 0.35)
-        lensHalfFov = min(max(outcome.lensHalfFovDegrees, 45), 120)
-    }
 
     func resetLens() {
         projection = .equidistant
@@ -174,6 +166,7 @@ final class FisheyeSettings: ObservableObject {
         centerY = 0
         edgeFeather = 0.025
         fillScreen = true
+        showGrid = false
         sharpness = 0.18
         localContrast = 0.10
         hazeCompensation = 0.05
