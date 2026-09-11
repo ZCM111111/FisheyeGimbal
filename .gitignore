@@ -7,9 +7,22 @@ tools/dual_out/
 tools/struct_out/
 tools/*_montage.jpg
 tools/*.jpg
+tools/__pycache__/
+
+# Training data and runs. This is the user's own footage and what is derived
+# from it: it must never enter the repository, private or not.
+fisheye_dataset/
+**/fisheye_dataset/
+dataset/
+runs/
+*.pt
+*.cache
+
+# Models are fine (weights only, no footage) — but keep the repository private.
+!models/*.onnx
+!models/*.mlmodel
 
 # Local scratch
 icon-sizes.png
 *.ips
 .DS_Store
-tools/__pycache__/

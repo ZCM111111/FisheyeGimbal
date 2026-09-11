@@ -390,6 +390,42 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Where a source pixel currently appears on screen.
+    ///
+    /// The inverse of `devicePoint(forViewPoint:)`, used to show what the
+    /// cabinet detector actually locked onto instead of guessing.
+    func viewPoint(forSourcePixel pixel: SIMD2<Float>, sourceSize: CGSize) -> CGPoint? {
+        stateLock.lock()
+        let matrix = lastMatrix
+        stateLock.unlock()
+
+        guard let metalView = view else { return nil }
+        let viewSize = metalView.bounds.size
+        guard sourceSize.width > 1, sourceSize.height > 1,
+              viewSize.width > 1, viewSize.height > 1 else { return nil }
+
+        guard let direction = settings.cameraDirection(forSourcePixel: pixel,
+                                                       sourceSize: sourceSize) else {
+            return nil
+        }
+        // Locked-frame ray, then the pinhole output.
+        let cameraRay = matrix.inverse * direction
+        guard cameraRay.z > 0.05 else { return nil }
+        let parameters = settings.parameters(sourceSize: sourceSize)
+        let halfWidth = Float(viewSize.width) * 0.5
+        let halfHeight = Float(viewSize.height) * 0.5
+        let cornerRadius = simd_length(SIMD2<Float>(halfWidth, halfHeight))
+        let requested = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
+        let cornerTheta = min(parameters.maxTheta, 1.36)
+        let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
+        let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
+
+        let xy = SIMD2<Float>(cameraRay.x, cameraRay.y) / cameraRay.z * focalOut
+        let point = CGPoint(x: CGFloat(halfWidth + xy.x), y: CGFloat(halfHeight + xy.y))
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        return point
+    }
+
     /// Angle of the frame's corner ray in the pinhole output, mirroring the
     /// shader's focal choice.
     private func cornerAngle(parameters: FisheyeParameters, viewSize: CGSize) -> Float {

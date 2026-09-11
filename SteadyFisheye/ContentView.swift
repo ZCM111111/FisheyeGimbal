@@ -38,7 +38,14 @@ struct ContentView: View {
                          motion: motion,
                          recorder: recorder,
                          failed: $rendererFailed,
-                         onRendererReady: { renderer = $0 })
+                         onRendererReady: { ready in
+                             renderer = ready
+                             // Lets the app show where the detector locked on,
+                             // which needs the current pose from the renderer.
+                             app.mapToPreview = { pixel, size in
+                                 ready.viewPoint(forSourcePixel: pixel, sourceSize: size)
+                             }
+                         })
                 .ignoresSafeArea()
                 .simultaneousGesture(
                     SpatialTapGesture()
@@ -54,6 +61,16 @@ struct ContentView: View {
                         }
                         .onEnded { _ in baseFov = nil }
                 )
+
+            // Where the detector thought the screen was, before the view moved.
+            // Seeing a wrong lock beats guessing why the picture jumped.
+            if let marker = app.detectionMarker {
+                Circle()
+                    .stroke(Theme.accent, lineWidth: 1.5)
+                    .frame(width: 30, height: 30)
+                    .position(marker)
+                    .allowsHitTesting(false)
+            }
 
             // Straight screen-space lines to judge real edges against while
             // calibrating by hand.

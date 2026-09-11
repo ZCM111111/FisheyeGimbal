@@ -62,6 +62,22 @@ final class CameraApp: ObservableObject {
 
     @Published private(set) var isAligning = false
     @Published private(set) var alignReport: String?
+    /// Where the detector thinks the screen is, in preview coordinates, so it
+    /// can be shown rather than guessed at.
+    @Published private(set) var detectionMarker: CGPoint?
+
+    /// Maps a source pixel to preview coordinates. Set by the view, which owns
+    /// the renderer that knows the current pose.
+    var mapToPreview: ((SIMD2<Float>, CGSize) -> CGPoint?)?
+
+    /// Never swing the view further than this when re-aiming.
+    ///
+    /// Beyond roughly this much the frame starts sampling past the edge of the
+    /// lens, and the shader pins those samples to the rim, which turns the
+    /// corners into a radial smear — the kaleidoscope look. A detection that
+    /// asks for more than this is far more likely to be wrong than the camera
+    /// is to be pointed that badly.
+    private static let maxAimDegrees: Float = 25
     @Published private(set) var isFraming = false
 
     /// Aligns on the cabinet and then zooms so its screen always fills the same
@@ -145,12 +161,33 @@ final class CameraApp: ObservableObject {
                     self.alignReport = result.summary
                     return
                 }
+
+                // Refuse a swing the frame cannot survive; report it instead of
+                // wrecking the picture.
+                let offAxis = acos(min(max(direction.z, -1), 1)) * 180 / .pi
+                guard offAxis <= Self.maxAimDegrees else {
+                    self.isAligning = false
+                    self.alignReport = String(format: "认到的机台偏离画面中心 %.0f°（上限 %.0f°），请先把手机大致对准机台。%@",
+                                              Double(offAxis), Double(Self.maxAimDegrees),
+                                              result.summary)
+                    return
+                }
+
+                // Show where it locked on *before* the view moves, so a wrong
+                // detection is visible instead of mysterious.
+                self.detectionMarker = self.mapToPreview?(result.centerPixel, sourceSize)
+                // Fades on its own so it does not sit over the preview forever.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    self?.detectionMarker = nil
+                }
+
                 self.motion.reLock(lookingAlong: direction)
                 if remaining > 1 {
                     self.alignPass(remaining: remaining - 1)
                 } else {
                     self.isAligning = false
-                    self.alignReport = "已对准 · " + result.summary
+                    self.alignReport = String(format: "已对准（偏离 %.0f°）· %@",
+                                              Double(offAxis), result.summary)
                 }
             }
         }
