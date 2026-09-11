@@ -155,6 +155,29 @@ final class FisheyeSettings: ObservableObject {
     @Published var localContrast: Float = 0.10
     @Published var hazeCompensation: Float = 0.05
 
+    /// Centre saved before the last measurement, so a bad measurement is one
+    /// tap away from being undone.
+    private var previousCenter: (Float, Float)?
+    @Published private(set) var hasCenterUndo = false
+
+    /// Applies a measured circle centre. Only these two values are touched, so
+    /// a measurement can never disturb the distortion terms that were tuned by
+    /// hand. The previous centre is kept so the change can be undone.
+    func applyMeasuredCenter(centerX newX: Float, centerY newY: Float) {
+        previousCenter = (centerX, centerY)
+        hasCenterUndo = true
+        centerX = min(max(newX, -0.25), 0.25)
+        centerY = min(max(newY, -0.25), 0.25)
+    }
+
+    func undoMeasuredCenter() {
+        guard hasCenterUndo, let previous = previousCenter else { return }
+        centerX = previous.0
+        centerY = previous.1
+        hasCenterUndo = false
+        previousCenter = nil
+    }
+
     func resetLens() {
         projection = .equidistant
         lensHalfFov = 90

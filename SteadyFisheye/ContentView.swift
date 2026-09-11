@@ -106,6 +106,9 @@ struct ContentView: View {
                         ControlPanel(settings: settings,
                                      motion: motion,
                                      camera: camera,
+                                     centering: app.isCentering,
+                                     centerReport: app.centerReport,
+                                     onCenter: { app.centerLens() },
                                      dismiss: {
                                          withAnimation(.easeOut(duration: 0.2)) {
                                              showControls = false

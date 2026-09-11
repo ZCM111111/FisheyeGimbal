@@ -9,6 +9,9 @@ struct ControlPanel: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
+    let centering: Bool
+    let centerReport: String?
+    let onCenter: () -> Void
     let dismiss: () -> Void
 
     @State private var showGeometry = true
@@ -210,6 +213,47 @@ struct ControlPanel: View {
                                 in: RoundedRectangle(cornerRadius: Theme.rBase))
                 }
                 .buttonStyle(.plain)
+
+                // Measures where the image circle sits and puts it in the
+                // middle. Only the centre is written back.
+                Button(action: onCenter) {
+                    HStack(spacing: Theme.sp2) {
+                        if centering {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: "scope")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Text(centering ? "正在测量…" : "自动居中成像圈")
+                            .font(Theme.label(12))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundColor(centering ? Theme.textSecondary : Theme.text)
+                    .padding(.horizontal, Theme.sp3)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background(Theme.surface2,
+                                in: RoundedRectangle(cornerRadius: Theme.rBase))
+                }
+                .buttonStyle(.plain)
+                .disabled(centering)
+
+                if let report = centerReport {
+                    Text(report)
+                        .font(Theme.label(10))
+                        .tracking(0.2)
+                        .foregroundColor(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if settings.hasCenterUndo {
+                    PanelButton(title: "撤销居中", isDestructive: true) {
+                        settings.undoMeasuredCenter()
+                    }
+                }
 
                 // Straight lines that still bow are the symptom; these two terms
                 // are what straighten them.

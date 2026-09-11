@@ -77,6 +77,17 @@ final class CameraService: NSObject, ObservableObject,
 
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
+    private var pendingGrid: ((LensCircleMeasurer.LumaGrid?) -> Void)?
+    private let gridLock = NSLock()
+
+    /// Asks for one frame, decimated to a luminance grid, for measuring where
+    /// the image circle sits. The handler runs off the main thread.
+    func requestLumaGrid(_ handler: @escaping (LensCircleMeasurer.LumaGrid?) -> Void) {
+        gridLock.lock()
+        pendingGrid = handler
+        gridLock.unlock()
+    }
+
     private let sessionQueue = DispatchQueue(label: "steadyfisheye.camera.session",
                                               qos: .userInitiated)
     private let videoQueue = DispatchQueue(label: "steadyfisheye.camera.video",
@@ -563,6 +574,21 @@ final class CameraService: NSObject, ObservableObject,
             }
         }
         lastFrameTimestamp = captureTime
+
+        // One-shot hand-off for measuring the lens circle. The frame is
+        // decimated right here while the buffer is still valid, so no pool
+        // buffer is held across frames.
+        gridLock.lock()
+        let pending = pendingGrid
+        pendingGrid = nil
+        gridLock.unlock()
+        if let pending = pending {
+            let grid = LensCircleMeasurer.makeGrid(from: pixelBuffer)
+            DispatchQueue.global(qos: .userInitiated).async {
+                pending(grid)
+            }
+        }
+
         onFrame?(pixelBuffer, captureTime)
     }
 }

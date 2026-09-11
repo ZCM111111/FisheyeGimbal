@@ -26,6 +26,39 @@ final class CameraApp: ObservableObject {
     let recorder = VideoRecorder()
 
     @Published private(set) var started = false
+    @Published private(set) var isCentering = false
+    @Published private(set) var centerReport: String?
+
+    /// Measures where the fisheye image circle sits and moves it to the middle
+    /// of the frame.
+    ///
+    /// Unlike the removed auto-calibration this only writes `centerX/centerY`.
+    /// The circle's position is measured rather than fitted, and hand-tuned
+    /// distortion terms are left untouched.
+    func centerLens() {
+        guard !isCentering, started else { return }
+        isCentering = true
+        centerReport = nil
+
+        camera.requestLumaGrid { [weak self] grid in
+            let result = grid.map { LensCircleMeasurer.measure(grid: $0) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isCentering = false
+                guard let result = result else {
+                    self.centerReport = "读不到画面，确认相机在出图"
+                    return
+                }
+                guard result.found else {
+                    self.centerReport = result.summary
+                    return
+                }
+                self.settings.applyMeasuredCenter(centerX: result.centerX,
+                                                  centerY: result.centerY)
+                self.centerReport = result.summary
+            }
+        }
+    }
 
     func start() {
         guard !started else { return }

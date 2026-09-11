@@ -21,6 +21,7 @@
         B20000000000000000000006 /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* VideoRecorder.swift */; };
         B20000000000000000000007 /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* ActivityView.swift */; };
         B20000000000000000000008 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* SettingsStore.swift */; };
+        B20000000000000000000009 /* LensCircleMeasurer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* LensCircleMeasurer.swift */; };
         C20000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -42,6 +43,7 @@
         A20000000000000000000007 /* ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityView.swift; sourceTree = "<group>"; };
         A20000000000000000000008 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
         A20000000000000000000009 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+        A20000000000000000000010 /* LensCircleMeasurer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LensCircleMeasurer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +90,7 @@
                 A20000000000000000000007 /* ActivityView.swift */,
                 A20000000000000000000008 /* SettingsStore.swift */,
                 A20000000000000000000009 /* Assets.xcassets */,
+                A20000000000000000000010 /* LensCircleMeasurer.swift */,
                 A10000000000000000000007 /* Shaders.metal */,
                 A10000000000000000000008 /* Info.plist */,
             );
@@ -176,6 +179,7 @@
                 B20000000000000000000006 /* VideoRecorder.swift in Sources */,
                 B20000000000000000000007 /* ActivityView.swift in Sources */,
                 B20000000000000000000008 /* SettingsStore.swift in Sources */,
+                B20000000000000000000009 /* LensCircleMeasurer.swift in Sources */,
                 B10000000000000000000007 /* Shaders.metal in Sources */,
             );
             runOnlyForDeploymentPostprocessing = 0;
