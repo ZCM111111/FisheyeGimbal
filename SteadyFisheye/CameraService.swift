@@ -78,8 +78,12 @@ final class CameraService: NSObject, ObservableObject,
 
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
-    private var pendingGrid: ((FrameGrid?) -> Void)?
-    private var pendingImage: ((CGImage?) -> Void)?
+    /// One-shot frame requests. A queue rather than a single slot: the automatic
+    /// cabinet search runs on a timer now, and with one slot it would silently
+    /// cancel whatever the user had just asked for — a lens measurement would
+    /// simply do nothing.
+    private var pendingGrids: [(FrameGrid?) -> Void] = []
+    private var pendingImages: [(CGImage?) -> Void] = []
     private let gridLock = NSLock()
 
     // Saving one untouched frame, for checking detection and calibration
@@ -164,7 +168,7 @@ final class CameraService: NSObject, ObservableObject,
     /// the lens circle or finding the cabinet. Runs off the main thread.
     func requestFrameGrid(_ handler: @escaping (FrameGrid?) -> Void) {
         gridLock.lock()
-        pendingGrid = handler
+        pendingGrids.append(handler)
         gridLock.unlock()
     }
 
@@ -175,7 +179,7 @@ final class CameraService: NSObject, ObservableObject,
     /// nothing is held across frames.
     func requestFrameImage(_ handler: @escaping (CGImage?) -> Void) {
         gridLock.lock()
-        pendingImage = handler
+        pendingImages.append(handler)
         gridLock.unlock()
     }
 
@@ -670,22 +674,22 @@ final class CameraService: NSObject, ObservableObject,
         // decimated right here while the buffer is still valid, so no pool
         // buffer is held across frames.
         gridLock.lock()
-        let pending = pendingGrid
-        let pendingImage = self.pendingImage
-        pendingGrid = nil
-        self.pendingImage = nil
+        let grids = pendingGrids
+        let images = pendingImages
+        pendingGrids = []
+        pendingImages = []
         gridLock.unlock()
-        if let pending = pending {
+        if !grids.isEmpty {
             let grid = FrameGrid.make(from: pixelBuffer)
             DispatchQueue.global(qos: .userInitiated).async {
-                pending(grid)
+                for handler in grids { handler(grid) }
             }
         }
-        if let pendingImage = pendingImage {
+        if !images.isEmpty {
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
             let image = ciContext.createCGImage(ciImage, from: ciImage.extent)
             DispatchQueue.global(qos: .userInitiated).async {
-                pendingImage(image)
+                for handler in images { handler(image) }
             }
         }
 

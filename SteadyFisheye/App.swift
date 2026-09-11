@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import QuartzCore
 
 @main
 struct SteadyFisheyeApp: App {
@@ -60,7 +61,6 @@ final class CameraApp: ObservableObject {
         }
     }
 
-    @Published private(set) var isAligning = false
     @Published private(set) var alignReport: String?
     /// Where the detector thinks the screen is, in preview coordinates, so it
     /// can be shown rather than guessed at.
@@ -153,7 +153,7 @@ final class CameraApp: ObservableObject {
     /// Aligns on the cabinet and then zooms so its screen always fills the same
     /// fraction of the frame. Same size, same place, every recording.
     func lockFraming() {
-        guard !isFraming, !isAligning, started else { return }
+        guard !isFraming, !autoAimBusy, started else { return }
         isFraming = true
         alignReport = nil
 
@@ -183,66 +183,128 @@ final class CameraApp: ObservableObject {
     /// Finds the cabinet in the frame and re-aims the lock so it sits in the
     /// middle.
     ///
+    /// Finds the cabinet and re-aims the lock so it sits in the middle — and
+    /// keeps doing it, so there is no button to press.
+    ///
     /// Alignment, not distortion correction: a wide lens stretches whatever is
     /// away from the centre, so an off-centre cabinet looks distorted however
     /// round its screen is. Centring it is what removes that.
-    func alignToCabinet() {
-        guard !isAligning, started else { return }
-        isAligning = true
-        alignReport = nil
-        alignPass(remaining: 2)
-    }
-
-    /// Two passes on purpose: the first one centres a ring that the wide lens
-    /// has distorted into a slightly non-circular shape, and once it is centred
-    /// that distortion is gone, so the second measurement lands closer.
-    private func alignPass(remaining: Int) {
-        // Only the detection runs off the main thread: it is pure CPU work over
-        // a local frame, with no shared state.
-        //
-        // The first pass is deliberately lenient for the classical detector: it
-        // runs on the raw fisheye frame, where the screen's circle is bent by
-        // the wide lens. Once centred, the second pass sees a true circle and
-        // can be strict.
-        detectAim(lenient: remaining > 1) { [weak self] aim, sourceSize in
-            guard let self else { return }
-            guard aim.found,
-                  let direction = self.settings.cameraDirection(
-                    forSourcePixel: aim.center,
-                    sourceSize: sourceSize) else {
-                self.isAligning = false
-                self.alignReport = aim.summary
-                return
-            }
-
-            // Refuse a swing the frame cannot survive; report it instead of
-            // wrecking the picture.
-            let offAxis = acos(min(max(direction.z, -1), 1)) * 180 / .pi
-            guard offAxis <= Self.maxAimDegrees else {
-                self.isAligning = false
-                self.alignReport = String(format: "认到的机台偏离画面中心 %.0f°（上限 %.0f°），请先把手机大致对准机台。%@",
-                                          Double(offAxis), Double(Self.maxAimDegrees),
-                                          aim.summary)
-                return
-            }
-
-            // Show where it locked on *before* the view moves, so a wrong
-            // detection is visible instead of mysterious.
-            self.detectionMarker = self.mapToPreview?(aim.center, sourceSize)
-            // Fades on its own so it does not sit over the preview forever.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-                self?.detectionMarker = nil
-            }
-
-            self.motion.reLock(lookingAlong: direction)
-            if remaining > 1 {
-                self.alignPass(remaining: remaining - 1)
-            } else {
-                self.isAligning = false
-                self.alignReport = String(format: "已对准（偏离 %.0f°）· %@",
-                                          Double(offAxis), aim.summary)
+    ///
+    /// Off is one tap away for anyone who wants to compose the shot themselves.
+    @Published var autoAim: Bool =
+        (UserDefaults.standard.object(forKey: "autoAim") as? Bool) ?? true {
+        didSet {
+            UserDefaults.standard.set(autoAim, forKey: "autoAim")
+            if !autoAim {
+                autoAimStatus = nil
+                previousAim = nil
+                agreeingAims = 0
             }
         }
+    }
+
+    /// What the automatic search is doing right now, for the panel.
+    @Published private(set) var autoAimStatus: String?
+
+    /// How often the search runs. Slower than the frame rate on purpose: the
+    /// picture barely changes between two checks, and one Vision inference per
+    /// frame would spend battery and heat on nothing new.
+    private static let autoAimInterval: TimeInterval = 0.45
+    /// Two detections this close together are the same cabinet.
+    private static let autoAimAgreement: Float = 0.06
+    /// Time to let a move settle before measuring again.
+    private static let autoAimCooldown: TimeInterval = 2.0
+    /// Below this much error, moving the picture is not worth it.
+    private static let autoAimToleranceDegrees: Float = 2.5
+
+    private var autoAimTimer: Timer?
+    private var autoAimBusy = false
+    private var autoAimCooldownUntil: CFTimeInterval = 0
+    private var previousAim: Aim?
+    private var agreeingAims = 0
+
+    private func startAutoAimTimer() {
+        guard autoAimTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.autoAimInterval, repeats: true) { [weak self] _ in
+            self?.autoAimStep()
+        }
+        // .common, so a check still happens while the panel is being scrolled.
+        RunLoop.main.add(timer, forMode: .common)
+        autoAimTimer = timer
+    }
+
+    /// One search-and-centre cycle.
+    private func autoAimStep() {
+        // Nothing while recording: a re-aim mid-take is a jump in the footage,
+        // and the mount is holding the framing steady by then anyway.
+        guard autoAim, started, !isFraming, !autoAimBusy, !recorder.isRecording,
+              CACurrentMediaTime() >= autoAimCooldownUntil else { return }
+        autoAimBusy = true
+
+        detectAim(lenient: false) { [weak self] aim, sourceSize in
+            guard let self else { return }
+            self.autoAimBusy = false
+
+            guard aim.found,
+                  let direction = self.settings.cameraDirection(forSourcePixel: aim.center,
+                                                                sourceSize: sourceSize) else {
+                // Forget where it was: acting on a memory of a cabinet that is
+                // no longer in view is how the picture ends up somewhere random.
+                self.previousAim = nil
+                self.agreeingAims = 0
+                self.autoAimStatus = "没看到机台 · \(aim.summary)"
+                return
+            }
+
+            // Hysteresis: the same cabinet twice in a row. A single frame can
+            // land on a key or a lamp, and moving the view for that is worse
+            // than not moving it at all.
+            if let previous = self.previousAim,
+               self.sameCabinet(aim, previous, sourceSize: sourceSize) {
+                self.agreeingAims += 1
+            } else {
+                self.agreeingAims = 1
+            }
+            self.previousAim = aim
+            guard self.agreeingAims >= 2 else {
+                self.autoAimStatus = "正在确认 · \(aim.summary)"
+                return
+            }
+
+            let offAxis = acos(min(max(direction.z, -1), 1)) * 180 / .pi
+            guard offAxis <= Self.maxAimDegrees else {
+                self.autoAimStatus = String(format: "机台偏离 %.0f°，超过上限 %.0f°",
+                                            Double(offAxis), Double(Self.maxAimDegrees))
+                return
+            }
+            guard offAxis > Self.autoAimToleranceDegrees else {
+                self.autoAimStatus = String(format: "已居中 · 偏 %.1f° · %@",
+                                            Double(offAxis), aim.summary)
+                return
+            }
+
+            self.autoAimCooldownUntil = CACurrentMediaTime() + Self.autoAimCooldown
+            // Show where it found the cabinet *before* the view moves, so a
+            // wrong detection is visible instead of mysterious.
+            self.detectionMarker = self.mapToPreview?(aim.center, sourceSize)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.detectionMarker = nil
+            }
+            self.motion.reLock(lookingAlong: direction)
+            self.autoAimStatus = String(format: "已自动居中（原来偏 %.0f°）· %@",
+                                        Double(offAxis), aim.summary)
+        }
+    }
+
+    /// Same cabinet, not merely "a circle about that size somewhere".
+    private func sameCabinet(_ a: Aim, _ b: Aim, sourceSize: CGSize) -> Bool {
+        let shortSide = Float(min(sourceSize.width, sourceSize.height))
+        guard shortSide > 1 else { return false }
+        let dx = a.center.x - b.center.x
+        let dy = a.center.y - b.center.y
+        let moved = (dx * dx + dy * dy).squareRoot() / shortSide
+        let ratio = a.radius / max(b.radius, 1)
+        return moved <= Self.autoAimAgreement && (0.6...1.7).contains(ratio)
     }
 
     func start() {
@@ -251,6 +313,7 @@ final class CameraApp: ObservableObject {
 
         // Bring the camera up on the same lens whose calibration was restored.
         camera.initialLens = settings.activeLens
+        startAutoAimTimer()
 
         motion.start()
         CameraService.requestAccess { [weak self] granted in

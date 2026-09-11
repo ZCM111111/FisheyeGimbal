@@ -12,9 +12,11 @@ struct ControlPanel: View {
     let centering: Bool
     let centerReport: String?
     let onCenter: () -> Void
-    let aligning: Bool
+    let autoAim: Bool
+    let autoAimStatus: String?
+    let isRecording: Bool
+    let onToggleAutoAim: () -> Void
     let alignReport: String?
-    let onAlign: () -> Void
     let framing: Bool
     let onLockFraming: () -> Void
     let onCaptureFrame: () -> Void
@@ -24,6 +26,14 @@ struct ControlPanel: View {
     @State private var showFinish = false
     @State private var showCalibration = true
     @State private var showStabilization = false
+
+    /// One line explaining what the automatic search is doing, because a feature
+    /// that moves the picture on its own has to say what it is up to.
+    private var autoAimStatusText: String {
+        if !autoAim { return "已关闭：自己构图，机台偏哪就偏哪" }
+        if isRecording { return "录制中暂停自动对准：中途把画面挪走会毁掉一整条片子" }
+        return autoAimStatus ?? "正在找机台…"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,30 +164,33 @@ struct ControlPanel: View {
 
             // Alignment, not lens correction: a wide lens stretches anything
             // away from the middle, so the cabinet has to sit on the axis.
-            Button(action: onAlign) {
+            //
+            // It runs by itself now, so this is a switch rather than a button.
+            Button(action: onToggleAutoAim) {
                 HStack(spacing: Theme.sp2) {
-                    if aligning {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .frame(width: 14, height: 14)
-                    } else {
-                        Image(systemName: "viewfinder")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    Text(aligning ? "正在找机台…" : "对准机台")
+                    Image(systemName: autoAim ? "viewfinder.circle.fill" : "viewfinder")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("自动对准机台")
                         .font(Theme.label(12))
                         .lineLimit(1)
                     Spacer(minLength: 0)
+                    Text(autoAim ? "开" : "关")
+                        .font(Theme.value(11))
                 }
-                .foregroundColor(aligning ? Theme.textSecondary : Theme.onAccent)
+                .foregroundColor(autoAim ? Theme.onAccent : Theme.text)
                 .padding(.horizontal, Theme.sp3)
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
-                .background(aligning ? Theme.surface2 : Theme.accent,
+                .background(autoAim ? Theme.accent : Theme.surface2,
                             in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
             .buttonStyle(.plain)
-            .disabled(aligning)
+
+            Text(autoAimStatusText)
+                .font(Theme.label(10))
+                .tracking(0.2)
+                .foregroundColor(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             // Repeatable framing: the screen ends up the same size in every
             // recording, so clips line up without cropping later.
