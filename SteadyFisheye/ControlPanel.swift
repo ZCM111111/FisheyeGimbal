@@ -345,6 +345,21 @@ struct ControlPanel: View {
                     onCaptureFrame()
                 }
 
+                // One untouched frame per second while the phone moves around a
+                // machine: this is how the detector's training set gets built.
+                PanelButton(title: camera.isCollectingFrames
+                            ? "停止采集（已存 \(camera.collectedFrames) 张）"
+                            : "连拍采集素材（每秒 1 张）") {
+                    camera.toggleRawFrameCollection()
+                }
+                if camera.isCollectingFrames {
+                    Text("对着机台慢慢走动，换几个距离和角度；屏幕亮屏、有歌在放最好。"
+                         + "文件存在「文件」App → SteadyFisheye/frames/，采完导到电脑再训一轮。")
+                        .font(Theme.label(11))
+                        .foregroundColor(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 PanelButton(title: "重置镜头", isDestructive: true) {
                     settings.resetLens()
                 }

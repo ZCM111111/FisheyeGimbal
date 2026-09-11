@@ -89,6 +89,16 @@ final class CameraService: NSObject, ObservableObject,
     private let ciContext = CIContext()
     @Published private(set) var rawFrameMessage: String?
 
+    /// Collecting a training set: one untouched frame every interval while the
+    /// phone is moved around the machine. `collecting` and the timer are guarded
+    /// by `stillLock` because the capture callback reads them off the main
+    /// thread; the published copies are for the panel only.
+    private var collecting = false
+    private var lastCollectionTime: Double = 0
+    private let collectionInterval: Double = 1.0
+    @Published private(set) var isCollectingFrames = false
+    @Published private(set) var collectedFrames = 0
+
     /// Writes the next camera frame, exactly as the pipeline receives it, into
     /// the app's Documents folder. Visible in the Files app.
     func captureRawFrame() {
@@ -97,7 +107,29 @@ final class CameraService: NSObject, ObservableObject,
         stillLock.unlock()
     }
 
-    private func saveRawFrame(_ pixelBuffer: CVPixelBuffer) {
+    /// Starts or stops the training-set burst.
+    ///
+    /// This is not meant to run while recording: the JPEG encode happens on the
+    /// capture callback, so each frame costs one dropped video frame. While
+    /// collecting, that is a fair trade; mid-recording it would not be.
+    func toggleRawFrameCollection() {
+        stillLock.lock()
+        collecting.toggle()
+        lastCollectionTime = 0
+        let nowCollecting = collecting
+        stillLock.unlock()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isCollectingFrames = nowCollecting
+            self.collectedFrames = 0
+            self.rawFrameMessage = nowCollecting
+                ? "开始采集：每秒 1 张。对着机台慢慢走动，存到「文件」→ SteadyFisheye/frames/"
+                : "采集已停止"
+        }
+    }
+
+    private func saveRawFrame(_ pixelBuffer: CVPixelBuffer, counted: Bool = false) {
         let image = CIImage(cvPixelBuffer: pixelBuffer)
         guard let data = ciContext.jpegRepresentation(
                 of: image,
@@ -117,9 +149,14 @@ final class CameraService: NSObject, ObservableObject,
         let url = folder.appendingPathComponent(name)
         let ok = (try? data.write(to: url)) != nil
         DispatchQueue.main.async { [weak self] in
-            self?.rawFrameMessage = ok
-                ? "原始帧已存到「文件」→ SteadyFisheye/frames/\(name)"
-                : "原始帧写入失败"
+            guard let self else { return }
+            if counted {
+                if ok { self.collectedFrames += 1 }
+            } else {
+                self.rawFrameMessage = ok
+                    ? "原始帧已存到「文件」→ SteadyFisheye/frames/\(name)"
+                    : "原始帧写入失败"
+            }
         }
     }
 
@@ -655,8 +692,19 @@ final class CameraService: NSObject, ObservableObject,
         stillLock.lock()
         let wantsStill = stillRequested
         stillRequested = false
+        // The burst timer lives under the same lock, since this callback is the
+        // only producer and it is not on the main thread.
+        var wantsBurst = false
+        if collecting, captureTime - lastCollectionTime >= collectionInterval {
+            lastCollectionTime = captureTime
+            wantsBurst = true
+        }
         stillLock.unlock()
-        if wantsStill { saveRawFrame(pixelBuffer) }
+        if wantsStill {
+            saveRawFrame(pixelBuffer)
+        } else if wantsBurst {
+            saveRawFrame(pixelBuffer, counted: true)
+        }
 
         onFrame?(pixelBuffer, captureTime)
     }
