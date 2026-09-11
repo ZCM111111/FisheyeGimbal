@@ -372,8 +372,26 @@ final class MotionStabilizer: ObservableObject {
         hasRenderedSample = true
     }
 
-    func setMode(_ newMode: Mode) {
+    /// Where the lock is pointing right now, expressed in the current camera
+    /// frame.
+    ///
+    /// Snapping the lock onto a new direction every time makes the picture jump,
+    /// so the automatic search glides instead: each pass nudges the lock a
+    /// fraction of the way toward its target, which needs to know how far apart
+    /// the two currently are.
+    func lockedCameraDirection() -> SIMD3<Float>? {
         lock.lock()
+        defer { lock.unlock() }
+        guard hasSample else { return nil }
+        // The lock is a device-to-world attitude, so its forward axis is the
+        // camera axis written in device coordinates.
+        let worldForward = simd_float3x3(lockedQuaternion)
+            * (cameraToDevice * SIMD3<Float>(0, 0, 1))
+        let relative = simd_float3x3(filtered).inverse * worldForward
+        return cameraToDevice * relative
+    }
+
+    func setMode(_ newMode: Mode) {        lock.lock()
         modeValue = newMode
         SettingsStore.saveStabilizerMode(newMode.rawValue)
         if hasSample {

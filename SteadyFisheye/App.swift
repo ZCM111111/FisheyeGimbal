@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import QuartzCore
+import simd
 
 @main
 struct SteadyFisheyeApp: App {
@@ -206,22 +207,40 @@ final class CameraApp: ObservableObject {
     /// What the automatic search is doing right now, for the panel.
     @Published private(set) var autoAimStatus: String?
 
-    /// How often the search runs. Slower than the frame rate on purpose: the
-    /// picture barely changes between two checks, and one Vision inference per
-    /// frame would spend battery and heat on nothing new.
-    private static let autoAimInterval: TimeInterval = 0.45
+    /// How often the search runs.
+    ///
+    /// Five times a second: often enough that tracking reads as continuous,
+    /// sparse enough that a Vision inference is not fighting the render pipeline
+    /// for the whole frame budget. Since each pass corrects a fraction of the
+    /// error, this rate sets how smoothly the picture drifts rather than how big
+    /// each move is.
+    private static let autoAimInterval: TimeInterval = 0.2
     /// Two detections this close together are the same cabinet.
     private static let autoAimAgreement: Float = 0.06
-    /// Time to let a move settle before measuring again.
-    private static let autoAimCooldown: TimeInterval = 2.0
+    /// Fraction of the remaining error corrected each pass.
+    ///
+    /// Small enough to read as a glide rather than a step, large enough to settle
+    /// in about a second: the error shrinks by this much every
+    /// `autoAimInterval`, which is a time constant near 0.6 s.
+    private static let autoAimStep: Float = 0.35
+    /// Slower while recording, so the footage does not visibly creep.
+    private static let autoAimRecordingStep: Float = 0.15
     /// Below this much error, moving the picture is not worth it.
-    private static let autoAimToleranceDegrees: Float = 2.5
+    private static let autoAimToleranceDegrees: Float = 0.6
+    private static let autoAimRecordingTolerance: Float = 1.5
+    /// A correction this large is a new answer rather than tracking, and a single
+    /// frame can land on a key or a lamp — so it has to repeat before the picture
+    /// moves for it. Ordinary tracking needs no such ceremony.
+    private static let autoAimSuspiciousDegrees: Float = 4
+    /// The search runs several times a second; the panel does not need to
+    /// redraw that often.
+    private static let autoAimStatusInterval: TimeInterval = 0.5
 
     private var autoAimTimer: Timer?
     private var autoAimBusy = false
-    private var autoAimCooldownUntil: CFTimeInterval = 0
     private var previousAim: Aim?
     private var agreeingAims = 0
+    private var lastAutoAimStatus: CFTimeInterval = 0
 
     private func startAutoAimTimer() {
         guard autoAimTimer == nil else { return }
@@ -233,12 +252,9 @@ final class CameraApp: ObservableObject {
         autoAimTimer = timer
     }
 
-    /// One search-and-centre cycle.
+    /// One search-and-centre pass.
     private func autoAimStep() {
-        // Nothing while recording: a re-aim mid-take is a jump in the footage,
-        // and the mount is holding the framing steady by then anyway.
-        guard autoAim, started, !isFraming, !autoAimBusy, !recorder.isRecording,
-              CACurrentMediaTime() >= autoAimCooldownUntil else { return }
+        guard autoAim, started, !isFraming, !autoAimBusy else { return }
         autoAimBusy = true
 
         detectAim(lenient: false) { [weak self] aim, sourceSize in
@@ -246,54 +262,93 @@ final class CameraApp: ObservableObject {
             self.autoAimBusy = false
 
             guard aim.found,
-                  let direction = self.settings.cameraDirection(forSourcePixel: aim.center,
-                                                                sourceSize: sourceSize) else {
+                  let target = self.settings.cameraDirection(forSourcePixel: aim.center,
+                                                             sourceSize: sourceSize) else {
                 // Forget where it was: acting on a memory of a cabinet that is
                 // no longer in view is how the picture ends up somewhere random.
                 self.previousAim = nil
                 self.agreeingAims = 0
-                self.autoAimStatus = "没看到机台 · \(aim.summary)"
+                self.publishAutoAim("没看到机台 · \(aim.summary)")
                 return
             }
 
-            // Hysteresis: the same cabinet twice in a row. A single frame can
-            // land on a key or a lamp, and moving the view for that is worse
-            // than not moving it at all.
-            if let previous = self.previousAim,
-               self.sameCabinet(aim, previous, sourceSize: sourceSize) {
-                self.agreeingAims += 1
+            // The correction is measured against where the lock is now, not
+            // against the optical axis: that is what the picture will move by,
+            // and it is what makes small tracking corrections free.
+            let current = self.motion.lockedCameraDirection() ?? SIMD3<Float>(0, 0, 1)
+            let error = Self.angleDegrees(from: current, to: target)
+            let recording = self.recorder.isRecording
+            let tolerance = recording ? Self.autoAimRecordingTolerance
+                                      : Self.autoAimToleranceDegrees
+
+            guard error > tolerance else {
+                self.previousAim = aim
+                self.agreeingAims = 0
+                self.publishAutoAim(String(format: "已居中 · 偏 %.1f° · %@",
+                                           Double(error), aim.summary))
+                return
+            }
+            guard error <= Self.maxAimDegrees else {
+                self.previousAim = nil
+                self.agreeingAims = 0
+                self.publishAutoAim(String(format: "机台偏离画面 %.0f°，超过上限 %.0f°",
+                                           Double(error), Double(Self.maxAimDegrees)))
+                return
+            }
+
+            // Hysteresis only for a jump: a single frame can land on a key or a
+            // lamp, and being dragged most of the way there on that is worse
+            // than waiting one more pass. Ordinary tracking needs no ceremony.
+            if error > Self.autoAimSuspiciousDegrees {
+                if let previous = self.previousAim,
+                   self.sameCabinet(aim, previous, sourceSize: sourceSize) {
+                    self.agreeingAims += 1
+                } else {
+                    self.agreeingAims = 1
+                }
+                self.previousAim = aim
+                guard self.agreeingAims >= 2 else {
+                    self.publishAutoAim("正在确认 · \(aim.summary)")
+                    return
+                }
             } else {
-                self.agreeingAims = 1
-            }
-            self.previousAim = aim
-            guard self.agreeingAims >= 2 else {
-                self.autoAimStatus = "正在确认 · \(aim.summary)"
-                return
+                self.previousAim = aim
+                self.agreeingAims = 0
             }
 
-            let offAxis = acos(min(max(direction.z, -1), 1)) * 180 / .pi
-            guard offAxis <= Self.maxAimDegrees else {
-                self.autoAimStatus = String(format: "机台偏离 %.0f°，超过上限 %.0f°",
-                                            Double(offAxis), Double(Self.maxAimDegrees))
-                return
-            }
-            guard offAxis > Self.autoAimToleranceDegrees else {
-                self.autoAimStatus = String(format: "已居中 · 偏 %.1f° · %@",
-                                            Double(offAxis), aim.summary)
-                return
-            }
+            // Glide rather than snap: correct a fraction of the error and let the
+            // next pass take another bite. The picture drifts into place instead
+            // of jumping, which is the whole difference between a tracker and a
+            // button.
+            let step = recording ? Self.autoAimRecordingStep : Self.autoAimStep
+            let blended = simd_normalize(current * (1 - step) + target * step)
+            self.motion.reLock(lookingAlong: blended)
 
-            self.autoAimCooldownUntil = CACurrentMediaTime() + Self.autoAimCooldown
-            // Show where it found the cabinet *before* the view moves, so a
-            // wrong detection is visible instead of mysterious.
-            self.detectionMarker = self.mapToPreview?(aim.center, sourceSize)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                self?.detectionMarker = nil
+            // Only for a real move, so the marker does not sit on the preview
+            // permanently while tracking.
+            if error > 3 {
+                self.detectionMarker = self.mapToPreview?(aim.center, sourceSize)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    self?.detectionMarker = nil
+                }
             }
-            self.motion.reLock(lookingAlong: direction)
-            self.autoAimStatus = String(format: "已自动居中（原来偏 %.0f°）· %@",
-                                        Double(offAxis), aim.summary)
+            self.publishAutoAim(String(format: "正在居中 · 还偏 %.1f° · %@",
+                                       Double(error), aim.summary))
         }
+    }
+
+    /// The panel does not need the search's full update rate.
+    private func publishAutoAim(_ text: String) {
+        let now = CACurrentMediaTime()
+        guard now - lastAutoAimStatus >= Self.autoAimStatusInterval else { return }
+        lastAutoAimStatus = now
+        autoAimStatus = text
+    }
+
+    private static func angleDegrees(from a: SIMD3<Float>, to b: SIMD3<Float>) -> Float {
+        let x = simd_normalize(a)
+        let y = simd_normalize(b)
+        return acos(min(max(simd_dot(x, y), -1), 1)) * 180 / .pi
     }
 
     /// Same cabinet, not merely "a circle about that size somewhere".

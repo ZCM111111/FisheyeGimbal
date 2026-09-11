@@ -31,8 +31,8 @@ struct ControlPanel: View {
     /// that moves the picture on its own has to say what it is up to.
     private var autoAimStatusText: String {
         if !autoAim { return "已关闭：自己构图，机台偏哪就偏哪" }
-        if isRecording { return "录制中暂停自动对准：中途把画面挪走会毁掉一整条片子" }
-        return autoAimStatus ?? "正在找机台…"
+        let line = autoAimStatus ?? "正在找机台…"
+        return isRecording ? line + " · 录制中慢速跟随" : line
     }
 
     var body: some View {
