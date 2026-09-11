@@ -1,29 +1,73 @@
-# SteadyFisheye
+# 鱼眼防抖
 
-A clean iOS prototype for a clip-on fisheye lens:
+给 iPhone 夹式鱼眼镜头用的实时矫正 + 防抖相机。
 
-- GPU inverse mapping corrects fisheye geometry in one render pass.
-- Core Motion locks the camera to the direction captured when the app starts or when Recenter is pressed.
-- Video frames are matched to a timestamped IMU history and then lightly smoothed at display time to reduce 120 Hz motion / 60 Hz rendering jitter.
-- Hold mode keeps the world direction fixed. Follow mode lets the lock drift toward a deliberate slow turn.
-- The preview uses the rear 0.5x ultra-wide camera by default, requests a real 60 FPS capture format, and disables Apple's video stabilization and geometric distortion correction so the lens can be calibrated from raw pixels.
+画面用 Metal 在 GPU 上做去畸变，方向用陀螺仪锁在世界坐标上——手机怎么晃，画面不乱跑、地平线不歪。录制的视频就是**矫正后**的画面。
 
-## Build
+## 功能
 
-Open `SteadyFisheye.xcodeproj` on macOS with Xcode 15 or newer. Select an iPhone target, set a signing team, and run on a real device. The simulator cannot provide a useful camera/IMU result. The app requests a real 60 FPS camera format; the status bar shows the measured rate. If a particular device cannot provide 60 FPS on its selected camera, it reports an error instead of silently running at 30.
+| 功能 | 说明 |
+|---|---|
+| **鱼眼矫正** | GPU 单次渲染完成反投影。支持等距/等立体角投影、径向 K1/K2、光轴偏移、成像圈比例 |
+| **一键自动标定** | 从画面自动测成像圈（径向亮度剖面 + 最小二乘圆拟合），再用场景里的直线拟合畸变系数 |
+| **按镜头存档** | 0.5x 超广角和 1x 主摄各存一套参数，启动自动恢复 |
+| **锁定 / 跟随 / 地平线** | 锁定 = 世界坐标锁死；跟随 = 缓慢追上你的转向；地平线 = 只锁横滚，实时参考重力 |
+| **点按对焦** | 点屏幕对焦并测光，黄框提示；点击位置会经鱼眼反算回传感器坐标 |
+| **曝光补偿** | 黄框旁竖滑条调 EV，范围读自设备实际支持值 |
+| **AE/AF 锁定** | 长按冻结曝光与对焦，再点一下解除 |
+| **录制** | 录的是矫正+防抖后的画面，带声音，停止后自动存相册 |
+| **防息屏** | 取景时不自动锁屏 |
 
-Codemagic is configured in `codemagic.yaml`. Connect the GitHub repository, select the `ios-unsigned` workflow, and start a build from `main`. The `SteadyFisheye-unsigned.ipa` artifact is deliberately not signed; install it on Windows with Sideloadly or AltStore using your Apple ID.
+## 安装
 
-The project is intentionally portrait-only. Roll, pitch, and yaw are compensated in camera coordinates while the interface remains portrait.
+**Windows（无需 Mac）**：仓库里配好了 `codemagic.yaml`。把 GitHub 仓库接到 Codemagic，选 `ios-unsigned` 工作流，从 `main` 构建；产物 `SteadyFisheye-unsigned.ipa` 是**故意不签名**的，用 Sideloadly 或 AltStore 配合你的 Apple ID 装到手机上。
 
-## Calibration order
+**macOS**：用 Xcode 16 打开 `SteadyFisheye.xcodeproj`，选 iPhone 真机、配上签名即可。**模拟器没有摄像头和陀螺仪，测不了。**
 
-1. Mount the lens without changing its position.
-2. Point at a straight door frame or table edge.
-3. Open the settings sheet from the slider button. Adjust `Lens half FOV` and `Circle scale` until the image circle is fully covered without excessive black edges.
-4. Select `Equidistant` or `Equisolid`, then adjust `Radial k1` and `Radial k2` until straight lines are straight.
-5. Adjust `Center X` and `Center Y` if the lens is off-center. `Output FOV` controls how much of the corrected image is shown.
-6. Use `Sensor smoothing` for physical motion filtering and `Display smoothing` for small residual jitter. Start low and increase only as needed.
-7. Press `Recenter`, then move the phone and check the locked direction.
+首次启动会请求三个权限（相机、麦克风、相册），都要允许。
 
-A pure IMU has gyro bias. It can hold a direction for a useful period but will slowly drift; pressing Recenter is expected. Large rotations can expose black edges because the requested ray leaves the fisheye image circle. This is a field-of-view limit, not a rendering bug.
+## 使用
+
+1. 夹上附加镜，**之后不要挪动它的位置**
+2. 打开右上角「**校正**」面板
+3. 对着**有长直线的场景**（门框、桌沿、显示器边框）按「**一键自动标定**」
+4. 看面板里的「**覆盖**」：90~100% 是理想区间；低于 88% 说明还有画面被裁掉，加大「输出视场」
+5. 切到「锁定」模式，故意把手机歪着，按「重新回中」——画面应该立刻转正
+6. 点「**录像**」开始录，再点停止 → 自动存进相册
+
+## 参数速查
+
+| 参数 | 作用 |
+|---|---|
+| 输出视场 | 看多宽。往小调 = 放大 |
+| 镜头半视场 | 模型认为镜片有多广。**决定画面是拉伸还是压缩** |
+| 成像圈比例 | 成像圈半径，配合「覆盖」读数微调 |
+| 径向 K1 / K2 | 把弯曲的直线掰直的主力 |
+| 中心 X / Y | 光轴在画面里的偏移 |
+| 铺满屏幕 / 完整视野 | 铺满 = 裁切填满手机屏；完整 = 保留整个成像圈（会有黑边）|
+
+## 已知限制
+
+- 换镜头或挪动附加镜，**必须重新标定**
+- 纯 IMU 有零偏，锁定方向会缓慢漂移，按「重新回中」修正
+- 锁定模式下大幅度转动会让取景窗滑到镜片边缘外，此时边缘会被拉伸（不会出黑边）
+- 0.5x 上跑 4K60 负载较高，长时间录制手机会发热
+
+## 源码
+
+```
+SteadyFisheye/
+  CameraService.swift       采集会话、对焦曝光、音频输入
+  MotionStabilizer.swift    陀螺仪 → 锁定姿态，三种模式
+  MetalRenderer.swift       Metal 管线，显示与录制双通道渲染
+  Shaders.metal             去畸变片元着色器
+  AutoCalibrator.swift      一键标定：成像圈检测 + 直线拟合
+  FisheyeSettings.swift     参数与按镜头存档
+  SettingsStore.swift       UserDefaults 持久化
+  VideoRecorder.swift       AVAssetWriter 录制（含音频）
+  FocusControls.swift       对焦框与曝光滑条
+  ControlPanel.swift        校正面板
+tools/make_icon.py          图标生成脚本（Pillow）
+```
+
+图标是一张弯曲的网格（鱼眼原图）加一条笔直的地平线（矫正后的结果）——这个 app 做的事就是这两样。
