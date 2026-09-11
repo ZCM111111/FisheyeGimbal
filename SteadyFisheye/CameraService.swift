@@ -198,7 +198,7 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         session.commitConfiguration()
         configured = true
         let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-        let format = "\(dimensions.width)x\(dimensions.height)  60 FPS  " + fourCC(pixelFormat)
+        let format = "\(dimensions.width)x\(dimensions.height) · " + fourCC(pixelFormat)
         let effectiveLens: Lens = device.deviceType == .builtInUltraWideCamera ? .ultraWide : .wide
         DispatchQueue.main.async { [weak self] in
             self?.lens = effectiveLens

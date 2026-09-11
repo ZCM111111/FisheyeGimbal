@@ -20,6 +20,8 @@ struct Segmented<T: Hashable>: View {
                     Text(index < titles.count ? titles[index] : "")
                         .font(Theme.value(11))
                         .foregroundColor(isActive ? Theme.onAccent : Theme.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity)
                         .frame(height: 26)
                         .background(
@@ -165,10 +167,15 @@ struct ReadoutRow: View {
                 .font(Theme.label(9))
                 .tracking(0.8)
                 .foregroundColor(Theme.textTertiary)
+                .lineLimit(1)
+                .fixedSize()
             Spacer(minLength: Theme.sp2)
             Text(value)
                 .font(Theme.value(11))
                 .foregroundColor(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .truncationMode(.middle)
         }
     }
 }

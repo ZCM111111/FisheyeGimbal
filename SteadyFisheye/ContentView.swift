@@ -93,31 +93,38 @@ struct ContentView: View {
     // MARK: - Status bar
 
     private var statusBar: some View {
-        HStack(spacing: Theme.sp3) {
+        HStack(spacing: Theme.sp2) {
             Circle()
                 .fill(camera.running ? Theme.success : Theme.warning)
                 .frame(width: 7, height: 7)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(camera.running ? "LIVE" : "WAITING")
-                    .font(Theme.label(11))
-                    .tracking(1.4)
-                    .foregroundColor(Theme.text)
-                Text(camera.formatText)
-                    .font(Theme.value(9))
-                    .foregroundColor(Theme.textTertiary)
-            }
+            Text(camera.running ? "LIVE" : "WAIT")
+                .font(Theme.label(11))
+                .tracking(1.2)
+                .foregroundColor(Theme.text)
+                .lineLimit(1)
+                .fixedSize()
+
+            Text(camera.formatText)
+                .font(Theme.value(9))
+                .foregroundColor(Theme.textTertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .truncationMode(.middle)
+
+            Spacer(minLength: Theme.sp1)
 
             Text(Bundle.main.buildStamp)
                 .font(Theme.value(9))
                 .foregroundColor(Theme.textTertiary)
+                .lineLimit(1)
+                .fixedSize()
 
-            Spacer(minLength: Theme.sp2)
-
-            Label(motion.locked ? "LOCKED" : "NO IMU", systemImage: "gyroscope")
-                .font(Theme.label(10))
-                .tracking(0.8)
+            Image(systemName: "gyroscope")
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(motion.available ? Theme.success : Theme.warning)
+                .frame(width: 16)
+                .accessibilityLabel(motion.locked ? "Locked" : "No motion data")
 
             Button { motion.recenter() } label: {
                 Image(systemName: "scope")
@@ -140,6 +147,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Toggle control panel")
         }
+        .lineLimit(1)
         .padding(.horizontal, Theme.sp3)
         .padding(.vertical, Theme.sp2)
         .background(Theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.rLg))
@@ -152,14 +160,11 @@ struct ContentView: View {
     private var bottomBar: some View {
         HStack(spacing: Theme.sp4) {
             metric("fov", "\(Int(settings.outputFov))°")
-            metric("mode", motion.mode.title.lowercased())
+            metric("mode", motion.mode.title)
             metric("rate", "\(camera.measuredFPS) fps")
             Spacer(minLength: 0)
-            Text("PINCH TO ZOOM")
-                .font(Theme.label(8))
-                .tracking(1.0)
-                .foregroundColor(Theme.textDisabled)
         }
+        .lineLimit(1)
         .padding(.horizontal, Theme.sp3)
         .padding(.vertical, Theme.sp2)
         .background(Theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.rLg))
@@ -177,6 +182,8 @@ struct ContentView: View {
                 .font(Theme.value(11))
                 .foregroundColor(Theme.text)
         }
+        .lineLimit(1)
+        .fixedSize()
     }
 }
 
