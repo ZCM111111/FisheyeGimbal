@@ -248,11 +248,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        updateHUD(sourceSize: CGSize(width: frame.size.x, height: frame.size.y))
+        updateHUD(sourceSize: CGSize(width: CGFloat(frame.size.x),
+                                      height: CGFloat(frame.size.y)))
     }
 
     private func makeUniforms(frame: SourceFrame, viewSize: CGSize) -> FEUniforms {
-        let parameters = settings.parameters(sourceSize: CGSize(width: frame.size.x, height: frame.size.y))
+        let parameters = settings.parameters(sourceSize: CGSize(width: CGFloat(frame.size.x),
+                                                                  height: CGFloat(frame.size.y)))
         let snapshot = motion.snapshot()
         let matrix = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
         let columns = matrix.columns
