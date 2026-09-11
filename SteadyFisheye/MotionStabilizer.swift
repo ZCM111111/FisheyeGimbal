@@ -179,6 +179,50 @@ final class MotionStabilizer: ObservableObject {
         return result
     }
 
+    /// The attitude to latch when the lock is established or re-centred: the
+    /// same pointing direction the phone has right now, but with the roll taken
+    /// from gravity instead of from the hand.
+    ///
+    /// Latching the raw attitude bakes in whatever tilt the phone happens to
+    /// have at that instant, so pressing re-centre (or simply starting the app)
+    /// while holding the phone crooked leaves the picture permanently crooked.
+    /// Re-centring should only choose *where* you are looking, never how level
+    /// the horizon is.
+    ///
+    /// Must be called with `lock` held.
+    private func levelLockedAttitude(from attitude: simd_quatf) -> simd_quatf {
+        let gravityWorld = attitude.act(gravityFiltered)
+        let gravityLength = simd_length(gravityWorld)
+        guard gravityLength > 0.05, hasGravity else { return attitude }
+        let vertical = gravityWorld / gravityLength
+
+        let cameraToWorld = simd_float3x3(attitude) * cameraToDevice
+        var forward = cameraToWorld * SIMD3<Float>(0, 0, 1)
+        let forwardLength = simd_length(forward)
+        guard forwardLength > 0.05 else { return attitude }
+        forward /= forwardLength
+
+        // The horizon is level exactly when the camera's right axis has no
+        // vertical component, and the basis also has to stay orthogonal to the
+        // optical axis. A cross product satisfies both at once; projecting out
+        // the vertical component alone would leave a skewed, non-rotational
+        // basis, and converting that to a quaternion is meaningless.
+        let cameraRight = cameraToWorld * SIMD3<Float>(1, 0, 0)
+        var right = simd_cross(forward, vertical)
+        let rightLength = simd_length(right)
+        // Pointing straight down or up leaves roll undefined; keep the attitude.
+        guard rightLength > 0.15 else { return attitude }
+        right /= rightLength
+        // Keep the picture the right way round instead of mirrored.
+        if simd_dot(right, cameraRight) < 0 { right = -right }
+
+        // Camera basis is right / down / forward, and X cross Y equals Z.
+        let down = simd_cross(forward, right)
+        let lockedCameraToWorld = simd_float3x3(columns: (right, down, forward))
+        let lockedDeviceToWorld = lockedCameraToWorld * cameraToDevice
+        return simd_quatf(lockedDeviceToWorld)
+    }
+
     /// Roll-only correction taken straight from gravity, the way a 360 camera
     /// holds its horizon: yaw and pitch stay free, the horizon stays level.
     /// Nothing is latched here, which is what makes it work even when the
@@ -255,7 +299,8 @@ final class MotionStabilizer: ObservableObject {
             return
         }
         if hasSample {
-            lockedQuaternion = filtered
+            // Level-latched: re-centring chooses the pointing direction only.
+            lockedQuaternion = levelLockedAttitude(from: filtered)
             lockVersion &+= 1
             let identity = identityQuaternion()
             latest.relativeDeviceQuaternion = identity
@@ -278,7 +323,8 @@ final class MotionStabilizer: ObservableObject {
         lock.lock()
         modeValue = newMode
         if hasSample {
-            lockedQuaternion = filtered
+            // Level-latched: re-centring chooses the pointing direction only.
+            lockedQuaternion = levelLockedAttitude(from: filtered)
             lockVersion &+= 1
             let identity = identityQuaternion()
             latest.relativeDeviceQuaternion = identity
@@ -314,7 +360,10 @@ final class MotionStabilizer: ObservableObject {
         if !hasSample {
             hasSample = true
             filtered = current
-            lockedQuaternion = current
+            // Seed gravity before latching, so the very first lock is level too.
+            gravityFiltered = gravity
+            hasGravity = true
+            lockedQuaternion = levelLockedAttitude(from: current)
             lastTimestamp = timestamp
         }
 
