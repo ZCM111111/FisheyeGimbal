@@ -94,6 +94,10 @@ final class CameraApp: ObservableObject {
         var center: SIMD2<Float>
         var radius: Float
         var summary: String
+        /// Capture time of the frame behind this answer, when the detector knows
+        /// it. Automatic centring uses it to convert the target with the pose of
+        /// that frame instead of the pose the phone has now.
+        var capturedAt: TimeInterval?
     }
 
     /// One detection: the trained model first, the classical circle detector as
@@ -107,7 +111,7 @@ final class CameraApp: ObservableObject {
             detectAimClassical(lenient: lenient, completion: completion)
             return
         }
-        camera.requestFrameImage { [weak self] image in
+        camera.requestFrameImage { [weak self] image, capturedAt in
             let detection = image.flatMap { ScreenDetector.detect(in: $0) }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -118,7 +122,8 @@ final class CameraApp: ObservableObject {
                                    center: SIMD2<Float>(Float(detection.center.x),
                                                         Float(detection.center.y)),
                                    radius: Float(detection.radius),
-                                   summary: detection.summary),
+                                   summary: detection.summary,
+                                   capturedAt: capturedAt),
                                CGSize(width: image.width, height: image.height))
                 } else {
                     self.detectAimClassical(lenient: lenient, completion: completion)
@@ -240,10 +245,6 @@ final class CameraApp: ObservableObject {
     /// every noisy detection is precisely how the picture ends up breathing.
     /// Anything beyond it is real: the cabinet moved, or you walked around it.
     private static let autoAimUpdateDegrees: Float = 0.4
-    /// Above this turn rate the lock is left alone rather than re-aimed: the
-    /// detector's frame is old enough that its answer disagrees with the present
-    /// pose, and correcting from it would drag the picture instead of holding it.
-    private static let autoAimHoldRate: Float = 12
     /// A correction this large is a new answer rather than tracking, and a single
     /// frame can land on a key or a lamp — so it has to repeat before the picture
     /// moves for it. Ordinary tracking needs no such ceremony.
@@ -306,21 +307,11 @@ final class CameraApp: ObservableObject {
                                            Double(error), aim.summary))
                 return
             }
-            // While the phone is being turned, leave the lock exactly where it is.
-            //
-            // The detector's answer comes from a frame that is tens of
-            // milliseconds old, so converting it with the pose of *now* reads the
-            // cabinet as being a couple of degrees off during any real turn —
-            // and the next detection pulls it back. That tug-and-release is the
-            // drag the eye sees as a spring. Turning the phone does not move the
-            // cabinet in the world anyway, so holding is not a compromise here:
-            // it is the correct thing to do, and it is what a lock looks like.
-            let turning = abs(self.motion.currentAngularRate())
-            if self.motion.hasAimTarget, turning > Self.autoAimHoldRate {
-                self.publishAutoAim(String(format: "转动中 %.0f°/s · 保持锁定", Double(turning)))
-                return
-            }
-
+            // While the phone is being turned, the detector's answer is old
+            // enough to be wrong about the present pose, so it is no longer used
+            // to correct from — the target is converted with the pose of its own
+            // frame instead, and the lock follows immediately. That is what keeps
+            // the subject still in the middle while the picture moves around it.
             guard error <= Self.maxAimDegrees else {
                 self.previousAim = nil
                 self.agreeingAims = 0
@@ -355,7 +346,8 @@ final class CameraApp: ObservableObject {
             // rather than as tracking.
             self.motion.setAimTarget(
                 cameraDirection: target,
-                smoothing: recording ? Self.autoAimRecordingSmoothing : Self.autoAimSmoothing)
+                smoothing: recording ? Self.autoAimRecordingSmoothing : Self.autoAimSmoothing,
+                capturedAt: aim.capturedAt)
             self.previousAim = aim
 
             // Only for a real move, so the marker does not sit on the preview

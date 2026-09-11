@@ -73,6 +73,9 @@ final class MotionStabilizer: ObservableObject {
     /// world lock's job — that is what keeps the subject pinned in the picture
     /// while everything else moves.
     var aimSmoothing: Double = 0.03
+    /// Recent raw attitudes, so a detection can be turned into a world direction
+    /// using the pose of the frame it came from rather than the pose of now.
+    private var attitudeHistory: [(time: TimeInterval, attitude: simd_quatf)] = []
     /// Stop correcting inside this angle. Small: the point is to have the target
     /// pinned in the middle, and the chase already filters the detector's
     /// frame-to-frame wobble.
@@ -422,7 +425,9 @@ final class MotionStabilizer: ObservableObject {
     /// the detector's own timer is what made the picture jerk: the correction
     /// arrived in detector-sized steps, and each one re-derived the lock from the
     /// smoothed attitude, so it also carried that filter's lag.
-    func setAimTarget(cameraDirection: SIMD3<Float>?, smoothing: Double? = nil) {
+    func setAimTarget(cameraDirection: SIMD3<Float>?,
+                      smoothing: Double? = nil,
+                      capturedAt time: TimeInterval? = nil) {
         lock.lock()
         defer { lock.unlock() }
         if let smoothing = smoothing {
@@ -434,8 +439,33 @@ final class MotionStabilizer: ObservableObject {
             aimTargetWorld = nil
             return
         }
-        aimTargetWorld = simd_normalize(
-            simd_float3x3(rawAttitude) * (cameraToDevice * direction))
+        // The pose of the frame the detector looked at. Using the present pose
+        // instead reads the cabinet as a couple of degrees off during any real
+        // turn — at 60°/s the detector's frame is already 40 ms old — and the
+        // next detection then corrects that error back, which is what a tug of
+        // war looks like on screen.
+        let pose = time.flatMap { attitude(at: $0) } ?? rawAttitude
+        aimTargetWorld = simd_normalize(simd_float3x3(pose) * (cameraToDevice * direction))
+    }
+
+    /// The raw attitude from a short history, nearest sample.
+    ///
+    /// Must be called with `lock` held. Nearest is enough: samples arrive about
+    /// every 10 ms, so even at a fast turn the residual is a fraction of a
+    /// degree, and a clock that does not line up simply falls back to the newest.
+    private func attitude(at time: TimeInterval) -> simd_quatf? {
+        guard let newest = attitudeHistory.last else { return nil }
+        guard abs(newest.time - time) < 0.5 else { return newest.attitude }
+        var best = newest
+        var bestDelta = abs(newest.time - time)
+        for entry in attitudeHistory {
+            let delta = abs(entry.time - time)
+            if delta < bestDelta {
+                best = entry
+                bestDelta = delta
+            }
+        }
+        return best.attitude
     }
 
     /// Where the lock is pointing right now, expressed in the current camera
@@ -516,6 +546,10 @@ final class MotionStabilizer: ObservableObject {
         }
         hasRate = true
         rawAttitude = current
+        attitudeHistory.append((time: timestamp, attitude: current))
+        if attitudeHistory.count > 90 {
+            attitudeHistory.removeFirst(attitudeHistory.count - 90)
+        }
         let alpha = smoothingValue <= 0 ? 1 : 1 - exp(-dt / smoothingValue)
         filtered = slerpShortest(filtered, current,
                                  amount: Float(min(max(alpha, 0), 1)))
@@ -534,7 +568,12 @@ final class MotionStabilizer: ObservableObject {
             gravityFiltered /= gravityLength
         }
 
-        if modeValue == .follow {
+        // Follow mode eases the lock toward the smoothed attitude, which is a
+        // spring by design. While something is being aimed at, that spring is a
+        // second opinion about where to point, and the two fight: the picture
+        // creeps away with the hand, then the next detection yanks it back. So
+        // the aim wins outright — an aim target is an instruction, not a vote.
+        if modeValue == .follow, aimTargetWorld == nil {
             let beta = 1 - exp(-dt / max(dampingValue, 0.15))
             lockedQuaternion = slerpShortest(lockedQuaternion, filtered,
                                              amount: Float(min(max(beta, 0), 1)))

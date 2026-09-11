@@ -83,7 +83,10 @@ final class CameraService: NSObject, ObservableObject,
     /// cancel whatever the user had just asked for — a lens measurement would
     /// simply do nothing.
     private var pendingGrids: [(FrameGrid?) -> Void] = []
-    private var pendingImages: [(CGImage?) -> Void] = []
+    /// The image plus the capture time, because a detection is turned into a
+    /// world direction and that has to use the pose the frame was taken with,
+    /// not the one the phone has by the time Vision has finished.
+    private var pendingImages: [(CGImage?, Double) -> Void] = []
     private let gridLock = NSLock()
 
     // Saving one untouched frame, for checking detection and calibration
@@ -177,7 +180,7 @@ final class CameraService: NSObject, ObservableObject,
     ///
     /// The image is rendered here, while the capture buffer is still valid, so
     /// nothing is held across frames.
-    func requestFrameImage(_ handler: @escaping (CGImage?) -> Void) {
+    func requestFrameImage(_ handler: @escaping (CGImage?, Double) -> Void) {
         gridLock.lock()
         pendingImages.append(handler)
         gridLock.unlock()
@@ -688,8 +691,9 @@ final class CameraService: NSObject, ObservableObject,
         if !images.isEmpty {
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
             let image = ciContext.createCGImage(ciImage, from: ciImage.extent)
+            let time = captureTime
             DispatchQueue.global(qos: .userInitiated).async {
-                for handler in images { handler(image) }
+                for handler in images { handler(image, time) }
             }
         }
 
