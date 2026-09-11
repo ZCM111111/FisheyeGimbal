@@ -112,6 +112,8 @@ struct ContentView: View {
                                      aligning: app.isAligning,
                                      alignReport: app.alignReport,
                                      onAlign: { app.alignToCabinet() },
+                                     framing: app.isFraming,
+                                     onLockFraming: { app.lockFraming() },
                                      onCaptureFrame: { camera.captureRawFrame() },
                                      dismiss: {
                                          withAnimation(.easeOut(duration: 0.2)) {

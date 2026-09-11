@@ -17,6 +17,9 @@ struct LensProfile: Codable {
     var edgeFeather: Float = 0.025
     var fillScreen: Bool = true
     var showGrid: Bool = false
+    /// Fraction of the frame width the cabinet's screen should occupy once the
+    /// framing lock is applied.
+    var cabinetFillTarget: Float = 0.8
     var sharpness: Float = 0.18
     var localContrast: Float = 0.10
     var hazeCompensation: Float = 0.05

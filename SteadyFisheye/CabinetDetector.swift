@@ -21,6 +21,8 @@ enum CabinetDetector {
         var centerY: Float = 0
         /// The same centre in source pixels, ready for the lens model.
         var centerPixel = SIMD2<Float>(0, 0)
+        /// Screen radius in source pixels, for the framing lock.
+        var radiusPixel: Float = 0
         /// Screen radius, normalised by the short side.
         var radius: Float = 0
         var support: Float = 0
@@ -194,6 +196,7 @@ enum CabinetDetector {
         let scaleX = Float(grid.sourceSize.width) / Float(width)
         let scaleY = Float(grid.sourceSize.height) / Float(height)
         result.centerPixel = SIMD2<Float>(center.x * scaleX, center.y * scaleY)
+        result.radiusPixel = ringRadius * (scaleX + scaleY) * 0.5
         result.radius = ringRadius / shortSide
         result.support = bestSupport
         result.found = true

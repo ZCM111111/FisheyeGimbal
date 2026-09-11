@@ -15,6 +15,8 @@ struct ControlPanel: View {
     let aligning: Bool
     let alignReport: String?
     let onAlign: () -> Void
+    let framing: Bool
+    let onLockFraming: () -> Void
     let onCaptureFrame: () -> Void
     let dismiss: () -> Void
 
@@ -176,6 +178,38 @@ struct ControlPanel: View {
             }
             .buttonStyle(.plain)
             .disabled(aligning)
+
+            // Repeatable framing: the screen ends up the same size in every
+            // recording, so clips line up without cropping later.
+            IndustrialSlider(title: "机台占比", unit: "%", digits: 0,
+                             value: Binding(get: { settings.cabinetFillTarget * 100 },
+                                            set: { settings.cabinetFillTarget = $0 / 100 }),
+                             range: 40...95)
+
+            Button(action: onLockFraming) {
+                HStack(spacing: Theme.sp2) {
+                    if framing {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "aspectratio")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Text(framing ? "正在锁定…" : "对准并锁定构图")
+                        .font(Theme.label(12))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .foregroundColor(framing ? Theme.textSecondary : Theme.text)
+                .padding(.horizontal, Theme.sp3)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
+                .background(Theme.surface2,
+                            in: RoundedRectangle(cornerRadius: Theme.rBase))
+            }
+            .buttonStyle(.plain)
+            .disabled(framing)
 
             if let report = alignReport {
                 Text(report)

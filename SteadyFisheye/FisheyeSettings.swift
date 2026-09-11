@@ -32,6 +32,9 @@ struct FisheyeParameters {
 }
 
 final class FisheyeSettings: ObservableObject {
+    /// Screen fill target for the framing lock, as a fraction of frame width.
+    @Published var cabinetFillTarget: Float = 0.8
+
     /// Whether the lens in use already has stored values, for the panel readout.
     @Published private(set) var hasStoredProfile = false
 
@@ -93,6 +96,7 @@ final class FisheyeSettings: ObservableObject {
                     edgeFeather: edgeFeather,
                     fillScreen: fillScreen,
                     showGrid: showGrid,
+                    cabinetFillTarget: cabinetFillTarget,
                     sharpness: sharpness,
                     localContrast: localContrast,
                     hazeCompensation: hazeCompensation)
@@ -110,6 +114,7 @@ final class FisheyeSettings: ObservableObject {
         edgeFeather = profile.edgeFeather
         fillScreen = profile.fillScreen
         showGrid = profile.showGrid
+        cabinetFillTarget = profile.cabinetFillTarget
         sharpness = profile.sharpness
         localContrast = profile.localContrast
         hazeCompensation = profile.hazeCompensation
@@ -161,20 +166,17 @@ final class FisheyeSettings: ObservableObject {
     private var previousCenter: (Float, Float)?
     @Published private(set) var hasCenterUndo = false
 
-    /// Direction, in camera coordinates (+X right, +Y down, +Z out of the back
-    /// camera), of the ray that lands on a given source pixel.
+    /// Angle, in camera coordinates, of the ray that lands on a source pixel.
     ///
-    /// This is the inverse of the shader's mapping, so a point measured in the
-    /// raw frame can be turned into the direction the view has to look along to
-    /// put it in the middle.
-    func cameraDirection(forSourcePixel pixel: SIMD2<Float>,
-                         sourceSize: CGSize) -> SIMD3<Float>? {
+    /// Undoes the radial distortion and then the projection, which is the
+    /// inverse of what the shader does.
+    func cameraAngle(forSourcePixel pixel: SIMD2<Float>,
+                     sourceSize: CGSize) -> Float? {
         let parameters = parameters(sourceSize: sourceSize)
         let offset = pixel - parameters.center
         let radius = simd_length(offset)
         guard radius > 1, radius.isFinite else { return nil }
 
-        // Undo the radial distortion, then the projection.
         let normalized = radius / max(parameters.maxRadius, 1)
         let factor = 1 + parameters.k1 * normalized * normalized
             + parameters.k2 * normalized * normalized * normalized * normalized
@@ -188,11 +190,42 @@ final class FisheyeSettings: ObservableObject {
             theta = 2 * asin(ratio)
         }
         guard theta.isFinite, theta < 1.5 else { return nil }
+        return theta
+    }
 
+    /// Direction, in camera coordinates (+X right, +Y down, +Z out of the back
+    /// camera), of the ray that lands on a given source pixel.
+    ///
+    /// This is the inverse of the shader's mapping, so a point measured in the
+    /// raw frame can be turned into the direction the view has to look along to
+    /// put it in the middle.
+    func cameraDirection(forSourcePixel pixel: SIMD2<Float>,
+                         sourceSize: CGSize) -> SIMD3<Float>? {
+        guard let theta = cameraAngle(forSourcePixel: pixel, sourceSize: sourceSize) else {
+            return nil
+        }
+        let parameters = parameters(sourceSize: sourceSize)
+        let offset = pixel - parameters.center
+        let radius = simd_length(offset)
+        guard radius > 1 else { return nil }
         let direction = offset / radius
         return SIMD3<Float>(sin(theta) * direction.x,
                             sin(theta) * direction.y,
                             cos(theta))
+    }
+
+    /// Zooms the view so a screen of the measured angular radius fills the
+    /// requested fraction of the frame width.
+    ///
+    /// The whole point is repeatability: align once, lock the framing, and every
+    /// later recording has the cabinet the same size in the same place.
+    func applyFramingLock(screenAngle: Float) {
+        let target = min(max(cabinetFillTarget, 0.3), 0.95)
+        let tangent = tan(screenAngle)
+        guard tangent > 0.001, tangent.isFinite else { return }
+        let halfFovRadians = atan(tangent / target)
+        let degrees = halfFovRadians * 2 * 180 / .pi
+        outputFov = min(max(degrees, 30), 130)
     }
 
     /// Applies a measured circle centre. Only these two values are touched, so
@@ -225,6 +258,7 @@ final class FisheyeSettings: ObservableObject {
         edgeFeather = 0.025
         fillScreen = true
         showGrid = false
+        cabinetFillTarget = 0.8
         sharpness = 0.18
         localContrast = 0.10
         hazeCompensation = 0.05

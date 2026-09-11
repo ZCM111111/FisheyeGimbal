@@ -62,6 +62,46 @@ final class CameraApp: ObservableObject {
 
     @Published private(set) var isAligning = false
     @Published private(set) var alignReport: String?
+    @Published private(set) var isFraming = false
+
+    /// Aligns on the cabinet and then zooms so its screen always fills the same
+    /// fraction of the frame. Same size, same place, every recording.
+    func lockFraming() {
+        guard !isFraming, !isAligning, started else { return }
+        isFraming = true
+        alignReport = nil
+
+        camera.requestFrameGrid { [weak self] grid in
+            let result = grid.map { CabinetDetector.detect(grid: $0) }
+            let sourceSize = grid?.sourceSize
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isFraming = false
+                guard let result = result, let sourceSize = sourceSize else {
+                    self.alignReport = "读不到画面，确认相机在出图"
+                    return
+                }
+                guard result.found,
+                      let direction = self.settings.cameraDirection(
+                        forSourcePixel: result.centerPixel,
+                        sourceSize: sourceSize),
+                      let angle = self.settings.cameraAngle(
+                        forSourcePixel: SIMD2<Float>(result.centerPixel.x + result.radiusPixel,
+                                                     result.centerPixel.y),
+                        sourceSize: sourceSize) else {
+                    self.alignReport = result.summary
+                    return
+                }
+                // Centre first, then zoom, so the measured radius refers to a
+                // circle that is no longer bent by the wide lens.
+                self.motion.reLock(lookingAlong: direction)
+                self.settings.applyFramingLock(screenAngle: angle)
+                self.alignReport = String(format: "已对准并锁定构图 · 占比 %.0f%% · %@",
+                                          Double(self.settings.cabinetFillTarget * 100),
+                                          result.summary)
+            }
+        }
+    }
 
     /// Finds the cabinet in the frame and re-aims the lock so it sits in the
     /// middle.
