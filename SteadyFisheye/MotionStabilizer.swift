@@ -65,13 +65,18 @@ final class MotionStabilizer: ObservableObject {
     /// Where the frame should end up centred, in world coordinates. Set by the
     /// detector, chased once per motion sample.
     private var aimTargetWorld: SIMD3<Float>?
-    /// Time constant of that chase, in seconds. Larger is calmer: the recording
-    /// path uses a larger value so the footage does not visibly creep.
-    var aimSmoothing: Double = 0.2
-    /// Stop correcting inside this angle, so the picture does not hunt. Kept
-    /// tiny: the point is to have the target pinned in the middle, and the chase
-    /// itself already filters out the detector's frame-to-frame wobble.
-    private let aimDeadZone: Float = 0.0009
+    /// Time constant of that chase, in seconds.
+    ///
+    /// It is a chase only in the smallest sense: the detector reports where the
+    /// cabinet is and the lock is set there at once, because easing toward a
+    /// target makes the frame trail the phone while it turns. The holding is the
+    /// world lock's job — that is what keeps the subject pinned in the picture
+    /// while everything else moves.
+    var aimSmoothing: Double = 0.03
+    /// Stop correcting inside this angle. Small: the point is to have the target
+    /// pinned in the middle, and the chase already filters the detector's
+    /// frame-to-frame wobble.
+    private let aimDeadZone: Float = 0.0004
     private var samples: [MotionSample] = []
     private let maxSampleCount = 36
     private var filtered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))

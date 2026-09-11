@@ -209,30 +209,37 @@ final class CameraApp: ObservableObject {
 
     /// How often the search runs.
     ///
-    /// Ten times a second. This is the tracking loop's sample rate: the glide
-    /// below can only be as fast as the target is refreshed, and chasing harder
-    /// than the target arrives is how a tracker starts oscillating. Each pass is
-    /// one Vision inference, which the neural engine handles well inside the
-    /// frame budget.
-    private static let autoAimInterval: TimeInterval = 0.1
+    /// Fourteen times a second. This is only how often the *aim* is refreshed:
+    /// the cabinet is held in place by the world lock between updates, so this
+    /// rate sets how quickly the lock notices that the geometry changed (you
+    /// walking around the machine), not how quickly it holds on.
+    private static let autoAimInterval: TimeInterval = 0.07
     /// Two detections this close together are the same cabinet.
     private static let autoAimAgreement: Float = 0.06
-    /// Time constant of the centring glide, in seconds. The stabiliser eases the
-    /// lock toward the reported target once per motion sample, so these set how
-    /// calmly the picture drifts rather than how big each step is.
+    /// Time constant of the centring, in seconds.
     ///
-    /// Short on purpose: the cabinet is meant to sit in the middle no matter
-    /// where the phone is pointed, which is a chasing feel, not a gentle one.
-    /// The limit is the detection latency — chase much faster than
-    /// `autoAimInterval` and the correction starts overshooting the target it
-    /// was given.
-    private static let autoAimSmoothing: Double = 0.18
-    /// Slightly calmer while recording, so a take does not look like it is
-    /// hunting, but still fast enough to hold the cabinet centred throughout.
-    private static let autoAimRecordingSmoothing: Double = 0.3
-    /// Below this much error, moving the picture is not worth it.
-    private static let autoAimToleranceDegrees: Float = 0.15
-    private static let autoAimRecordingTolerance: Float = 0.4
+    /// Almost zero on purpose. The detector reports where the cabinet *is*, and
+    /// the lock is set to that direction immediately rather than eased toward it.
+    /// Easing means the frame trails the phone during a turn — the cabinet
+    /// wanders across the picture until the chase catches up — which is the
+    /// opposite of a locked shot. Set the lock and let the world lock do the
+    /// holding: that is the orbit-the-car look, where the subject sits still and
+    /// everything else moves.
+    ///
+    /// Not quite zero, because the detector's own position wobbles by a pixel or
+    /// two between frames and that is not worth passing on as shake.
+    private static let autoAimSmoothing: Double = 0.03
+    /// Still fast while recording, just enough to keep the frame from snapping.
+    private static let autoAimRecordingSmoothing: Double = 0.08
+    /// How far the detector has to disagree with the current lock before the aim
+    /// moves at all.
+    ///
+    /// This is what makes the shot rigid. Rotating the phone does not move the
+    /// cabinet in the world, so a lock that was right stays right, and the
+    /// detector's frame-to-frame wobble is smaller than this — re-aiming from
+    /// every noisy detection is precisely how the picture ends up breathing.
+    /// Anything beyond it is real: the cabinet moved, or you walked around it.
+    private static let autoAimUpdateDegrees: Float = 0.4
     /// A correction this large is a new answer rather than tracking, and a single
     /// frame can land on a key or a lamp — so it has to repeat before the picture
     /// moves for it. Ordinary tracking needs no such ceremony.
@@ -278,19 +285,20 @@ final class CameraApp: ObservableObject {
                 return
             }
 
-            // The correction is measured against where the lock is now, not
-            // against the optical axis: that is what the picture will move by,
-            // and it is what makes small tracking corrections free.
+            // How far the cabinet is from where the frame is centred. Measured
+            // against the lock rather than the optical axis, because that is what
+            // the picture will actually move by.
             let current = self.motion.lockedCameraDirection() ?? SIMD3<Float>(0, 0, 1)
             let error = Self.angleDegrees(from: current, to: target)
             let recording = self.recorder.isRecording
-            let tolerance = recording ? Self.autoAimRecordingTolerance
-                                      : Self.autoAimToleranceDegrees
 
-            guard error > tolerance else {
+            guard error > Self.autoAimUpdateDegrees else {
+                // Already on it. Deliberately leaves the lock alone: the world
+                // lock is holding the shot, and re-aiming every pass from a noisy
+                // detection would only add shake.
                 self.previousAim = aim
                 self.agreeingAims = 0
-                self.publishAutoAim(String(format: "已居中 · 偏 %.1f° · %@",
+                self.publishAutoAim(String(format: "已锁定 · 偏 %.2f° · %@",
                                            Double(error), aim.summary))
                 return
             }
