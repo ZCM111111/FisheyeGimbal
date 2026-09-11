@@ -57,6 +57,19 @@ final class MotionStabilizer: ObservableObject {
     private let lock = NSLock()
 
     private var latest = MotionSnapshot()
+    /// The un-smoothed attitude of the most recent sample. Automatic centring
+    /// turns its target into a world direction with this one: using the filtered
+    /// attitude would bake the low pass's lag into the aim and make the picture
+    /// flinch every time the detector refreshed.
+    private var rawAttitude = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    /// Where the frame should end up centred, in world coordinates. Set by the
+    /// detector, chased once per motion sample.
+    private var aimTargetWorld: SIMD3<Float>?
+    /// Time constant of that chase, in seconds. Larger is calmer: the recording
+    /// path uses a larger value so the footage does not visibly creep.
+    var aimSmoothing: Double = 0.5
+    /// Stop correcting inside this angle, so the picture does not hunt.
+    private let aimDeadZone: Float = 0.0035
     private var samples: [MotionSample] = []
     private let maxSampleCount = 36
     private var filtered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
@@ -372,6 +385,30 @@ final class MotionStabilizer: ObservableObject {
         hasRenderedSample = true
     }
 
+    /// Where the frame should be centred, in camera coordinates. Pass nil to
+    /// stop chasing anything.
+    ///
+    /// The direction is converted to a world direction once, here, and the glide
+    /// then runs per motion sample inside the update loop. Re-aiming the lock on
+    /// the detector's own timer is what made the picture jerk: the correction
+    /// arrived in detector-sized steps, and each one re-derived the lock from the
+    /// smoothed attitude, so it also carried that filter's lag.
+    func setAimTarget(cameraDirection: SIMD3<Float>?, smoothing: Double? = nil) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let smoothing = smoothing {
+            // Set under the lock: the motion queue reads it on every sample.
+            aimSmoothing = min(max(smoothing, 0.05), 5)
+        }
+        guard let direction = cameraDirection, hasSample,
+              simd_length(direction) > 0.01 else {
+            aimTargetWorld = nil
+            return
+        }
+        aimTargetWorld = simd_normalize(
+            simd_float3x3(rawAttitude) * (cameraToDevice * direction))
+    }
+
     /// Where the lock is pointing right now, expressed in the current camera
     /// frame.
     ///
@@ -441,6 +478,7 @@ final class MotionStabilizer: ObservableObject {
 
         let dt = min(max(timestamp - lastTimestamp, 1.0 / 240.0), 0.25)
         lastTimestamp = timestamp
+        rawAttitude = current
         let alpha = smoothingValue <= 0 ? 1 : 1 - exp(-dt / smoothingValue)
         filtered = slerpShortest(filtered, current,
                                  amount: Float(min(max(alpha, 0), 1)))
@@ -463,6 +501,30 @@ final class MotionStabilizer: ObservableObject {
             let beta = 1 - exp(-dt / max(dampingValue, 0.15))
             lockedQuaternion = slerpShortest(lockedQuaternion, filtered,
                                              amount: Float(min(max(beta, 0), 1)))
+        }
+
+        // Automatic centring, eased here rather than on the detector's timer.
+        //
+        // This runs once per motion sample, so a target the detector refreshes
+        // five times a second still moves the picture in hundred-hertz steps:
+        // one continuous glide instead of five visible jerks. The lock is
+        // adjusted in place, with no version bump and no sample history cleared,
+        // so nothing downstream treats the change as a discontinuity.
+        if modeValue != .horizon, let target = aimTargetWorld {
+            let deviceForward = cameraToDevice * SIMD3<Float>(0, 0, 1)
+            let worldForward = simd_float3x3(lockedQuaternion) * deviceForward
+            let alignment = min(max(simd_dot(worldForward, target), -1), 1)
+            if alignment < cos(aimDeadZone) {
+                let amount = Float(min(max(1 - exp(-dt / max(aimSmoothing, 0.05)), 0), 1))
+                let blended = simd_normalize(worldForward * (1 - amount) + target * amount)
+                // Both levelLockedAttitude and cameraDirection work in the camera
+                // frame of the current pose, so the world direction goes back
+                // through the raw attitude — the same one the picture is built
+                // from, not the smoothed one.
+                let cameraFromWorld = cameraToDevice * simd_float3x3(current).inverse
+                lockedQuaternion = levelLockedAttitude(from: current,
+                                                      cameraDirection: cameraFromWorld * blended)
+            }
         }
 
         // The correction has to be built from the RAW attitude. Using the

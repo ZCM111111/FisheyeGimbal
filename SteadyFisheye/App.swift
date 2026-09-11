@@ -217,14 +217,12 @@ final class CameraApp: ObservableObject {
     private static let autoAimInterval: TimeInterval = 0.2
     /// Two detections this close together are the same cabinet.
     private static let autoAimAgreement: Float = 0.06
-    /// Fraction of the remaining error corrected each pass.
-    ///
-    /// Small enough to read as a glide rather than a step, large enough to settle
-    /// in about a second: the error shrinks by this much every
-    /// `autoAimInterval`, which is a time constant near 0.6 s.
-    private static let autoAimStep: Float = 0.35
-    /// Slower while recording, so the footage does not visibly creep.
-    private static let autoAimRecordingStep: Float = 0.15
+    /// Time constant of the centring glide, in seconds. The stabiliser eases the
+    /// lock toward the reported target once per motion sample, so these set how
+    /// calmly the picture drifts rather than how big each step is.
+    private static let autoAimSmoothing: Double = 0.5
+    /// Calmer while recording, so the footage does not visibly creep.
+    private static let autoAimRecordingSmoothing: Double = 1.3
     /// Below this much error, moving the picture is not worth it.
     private static let autoAimToleranceDegrees: Float = 0.6
     private static let autoAimRecordingTolerance: Float = 1.5
@@ -268,6 +266,7 @@ final class CameraApp: ObservableObject {
                 // no longer in view is how the picture ends up somewhere random.
                 self.previousAim = nil
                 self.agreeingAims = 0
+                self.motion.setAimTarget(cameraDirection: nil)
                 self.publishAutoAim("没看到机台 · \(aim.summary)")
                 return
             }
@@ -316,13 +315,14 @@ final class CameraApp: ObservableObject {
                 self.agreeingAims = 0
             }
 
-            // Glide rather than snap: correct a fraction of the error and let the
-            // next pass take another bite. The picture drifts into place instead
-            // of jumping, which is the whole difference between a tracker and a
-            // button.
-            let step = recording ? Self.autoAimRecordingStep : Self.autoAimStep
-            let blended = simd_normalize(current * (1 - step) + target * step)
-            self.motion.reLock(lookingAlong: blended)
+            // Report the target and let the stabiliser chase it per motion
+            // sample. Correcting here instead would move the picture in
+            // detector-sized steps, five times a second, which reads as a jitter
+            // rather than as tracking.
+            self.motion.setAimTarget(
+                cameraDirection: target,
+                smoothing: recording ? Self.autoAimRecordingSmoothing : Self.autoAimSmoothing)
+            self.previousAim = aim
 
             // Only for a real move, so the marker does not sit on the preview
             // permanently while tracking.
