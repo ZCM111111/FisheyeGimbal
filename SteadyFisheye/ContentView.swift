@@ -7,6 +7,7 @@ struct ContentView: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
+    @ObservedObject var recorder: VideoRecorder
 
     /// Closed on launch so the preview is unobstructed; the labelled 校正
     /// button opens the fisheye console.
@@ -21,6 +22,8 @@ struct ContentView: View {
     @State private var focusToken = 0
     @State private var ignoreNextTap = false
     @State private var renderer: MetalRenderer?
+    @State private var toast: String?
+    @State private var toastToken = 0
 
     var body: some View {
         ZStack {
@@ -29,6 +32,7 @@ struct ContentView: View {
             MetalPreview(camera: camera,
                          settings: settings,
                          motion: motion,
+                         recorder: recorder,
                          failed: $rendererFailed,
                          onRendererReady: { renderer = $0 })
                 .ignoresSafeArea()
@@ -67,6 +71,18 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 statusBar
                 Spacer()
+                if let toast = toast {
+                    Text(toast)
+                        .font(Theme.label(11))
+                        .tracking(0.3)
+                        .foregroundColor(Theme.text)
+                        .padding(.horizontal, Theme.sp3)
+                        .padding(.vertical, Theme.sp2)
+                        .background(Theme.surface.opacity(0.94),
+                                    in: RoundedRectangle(cornerRadius: Theme.rBase))
+                        .padding(.bottom, Theme.sp2)
+                        .transition(.opacity)
+                }
                 bottomBar
             }
 
@@ -125,8 +141,51 @@ struct ContentView: View {
                 }
             }
         }
-        .onAppear { app.start() }
-        .onDisappear { app.stop() }
+        .onAppear {
+            // The preview is the product: the screen must not dim while the
+            // user is framing a shot.
+            UIApplication.shared.isIdleTimerDisabled = true
+            app.start()
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            if recorder.isRecording { recorder.stop() }
+            app.stop()
+        }
+        .onChange(of: recorder.message) { value in
+            if let value = value { showToast(value) }
+        }
+    }
+
+    // MARK: - Recording
+
+    private func toggleRecording() {
+        if recorder.isRecording {
+            recorder.stop()
+            return
+        }
+        guard let size = renderer?.preferredRecordingSize() else {
+            showToast("渲染器还没准备好")
+            return
+        }
+        if !recorder.start(size: size) {
+            showToast(recorder.message ?? "录像启动失败")
+        }
+    }
+
+    private var recordingTimeText: String {
+        let total = Int(recorder.duration.rounded())
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    private func showToast(_ text: String) {
+        toastToken += 1
+        let token = toastToken
+        withAnimation(.easeOut(duration: 0.2)) { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            guard token == toastToken else { return }
+            withAnimation(.easeOut(duration: 0.3)) { toast = nil }
+        }
     }
 
     // MARK: - Focus and exposure interaction
@@ -305,6 +364,7 @@ struct ContentView: View {
             }
             metric("帧率", "\(camera.measuredFPS) 帧")
             Spacer(minLength: 0)
+            recordButton
         }
         .lineLimit(1)
         .padding(.horizontal, Theme.sp3)
@@ -312,6 +372,33 @@ struct ContentView: View {
         .background(Theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.rLg))
         .padding(.horizontal, Theme.sp3)
         .padding(.bottom, Theme.sp2)
+    }
+
+    private var recordButton: some View {
+        Button { toggleRecording() } label: {
+            HStack(spacing: 5) {
+                if recorder.isRecording {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color.white)
+                        .frame(width: 8, height: 8)
+                } else {
+                    Circle()
+                        .fill(Theme.danger)
+                        .frame(width: 8, height: 8)
+                }
+                Text(recorder.isRecording ? recordingTimeText : "录像")
+                    .font(Theme.value(11))
+                    .foregroundColor(recorder.isRecording ? .white : Theme.text)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(recorder.isRecording ? Theme.danger : Theme.surface2,
+                        in: RoundedRectangle(cornerRadius: Theme.rBase))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel(recorder.isRecording ? "停止录像" : "开始录像")
     }
 
     private func metric(_ label: String, _ value: String) -> some View {
@@ -335,6 +422,7 @@ private struct MetalPreview: UIViewRepresentable {
     let camera: CameraService
     let settings: FisheyeSettings
     let motion: MotionStabilizer
+    let recorder: VideoRecorder
     @Binding var failed: Bool
     let onRendererReady: (MetalRenderer) -> Void
 
@@ -347,6 +435,7 @@ private struct MetalPreview: UIViewRepresentable {
         do {
             let renderer = try MetalRenderer(view: view, settings: settings, motion: motion)
             context.coordinator.renderer = renderer
+            renderer.recorder = recorder
             renderer.coverageHandler = { [weak camera] percent in
                 camera?.reportCoverage(percent)
             }

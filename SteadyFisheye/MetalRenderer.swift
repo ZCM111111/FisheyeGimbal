@@ -52,6 +52,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let frameLock = NSLock()
     private var latestFrame: SourceFrame?
 
+    /// Set by the view so the corrected frame can also be written to a file.
+    var recorder: VideoRecorder?
+
     private weak var view: MTKView?
     private var lastFrameTimestamp: Double = 0
     private var cameraFPS: Double = 0
@@ -216,6 +219,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return (texture, wrapper)
     }
 
+    /// Size the next recording should use, matched to the current preview so
+    /// the file has the same framing the user sees.
+    func preferredRecordingSize() -> CGSize {
+        let size = view?.drawableSize ?? CGSize(width: 1080, height: 1920)
+        return VideoRecorder.fittedSize(for: size)
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
@@ -253,6 +263,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             withExtendedLifetime(frame) {}
         }
         commandBuffer.present(drawable)
+        // Recording frames are only handed over once the GPU is done writing
+        // them, which is what the completion handler below guarantees.
+        renderRecordingFrameIfNeeded(after: commandBuffer, frame: frame)
         commandBuffer.commit()
 
         updateHUD(sourceSize: CGSize(width: CGFloat(frame.size.x),
@@ -293,6 +306,68 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                    settings.fillScreen ? 1 : 0,
                                    parameters.travel)
         )
+    }
+
+    /// Draws the same corrected frame once more, this time into an
+    /// IOSurface-backed pixel buffer the encoder can consume directly.
+    ///
+    /// The point of rendering rather than recording the camera feed is that the
+    /// file contains the undistorted, stabilised picture — the whole reason the
+    /// app exists — instead of the raw fisheye.
+    private func renderRecordingFrameIfNeeded(after commandBuffer: MTLCommandBuffer,
+                                              frame: SourceFrame) {
+        guard let recorder = recorder, recorder.isRecording,
+              let pixelBuffer = recorder.makePixelBuffer() else { return }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0 else { return }
+
+        var wrapped: CVMetalTexture?
+        guard CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+                                                        textureCache,
+                                                        pixelBuffer,
+                                                        nil,
+                                                        .bgra8Unorm,
+                                                        width,
+                                                        height,
+                                                        0,
+                                                        &wrapped) == kCVReturnSuccess,
+              let cvTexture = wrapped,
+              let texture = CVMetalTextureGetTexture(cvTexture) else { return }
+
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+            return
+        }
+        var uniforms = makeUniforms(frame: frame,
+                                    viewSize: CGSize(width: width, height: height))
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<FEUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<FEUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(frame.textures[0], index: 0)
+        encoder.setFragmentTexture(frame.textures.count > 1 ? frame.textures[1] : frame.textures[0],
+                                   index: 1)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
+
+        let timestamp = frame.timestamp
+        commandBuffer.addCompletedHandler { [weak recorder] _ in
+            // The texture wrapper has to outlive the GPU work, and the pixel
+            // buffer reference is what keeps the IOSurface alive.
+            withExtendedLifetime(cvTexture) {
+                guard let recorder = recorder else { return }
+                let time = CMTime(seconds: timestamp, preferredTimescale: 600)
+                DispatchQueue.main.async {
+                    recorder.append(pixelBuffer, at: time)
+                }
+            }
+        }
     }
 
     /// How much of the lens circle the corners of the screen reach, as a

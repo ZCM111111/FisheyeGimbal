@@ -10,7 +10,8 @@ struct SteadyFisheyeApp: App {
             ContentView(app: app,
                         settings: app.settings,
                         motion: app.motion,
-                        camera: app.camera)
+                        camera: app.camera,
+                        recorder: app.recorder)
                 .preferredColorScheme(.dark)
                 .statusBarHidden()
                 .ignoresSafeArea()
@@ -22,6 +23,7 @@ final class CameraApp: ObservableObject {
     let settings = FisheyeSettings()
     let motion = MotionStabilizer()
     let camera = CameraService()
+    let recorder = VideoRecorder()
 
     @Published private(set) var started = false
     @Published private(set) var isCalibrating = false

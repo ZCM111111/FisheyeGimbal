@@ -19,6 +19,7 @@
         B20000000000000000000003 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* ControlPanel.swift */; };
         B20000000000000000000004 /* AutoCalibrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* AutoCalibrator.swift */; };
         B20000000000000000000005 /* FocusControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* FocusControls.swift */; };
+        B20000000000000000000006 /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* VideoRecorder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
         A20000000000000000000003 /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
         A20000000000000000000004 /* AutoCalibrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoCalibrator.swift; sourceTree = "<group>"; };
         A20000000000000000000005 /* FocusControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusControls.swift; sourceTree = "<group>"; };
+        A20000000000000000000006 /* VideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +81,7 @@
                 A20000000000000000000003 /* ControlPanel.swift */,
                 A20000000000000000000004 /* AutoCalibrator.swift */,
                 A20000000000000000000005 /* FocusControls.swift */,
+                A20000000000000000000006 /* VideoRecorder.swift */,
                 A10000000000000000000007 /* Shaders.metal */,
                 A10000000000000000000008 /* Info.plist */,
             );
@@ -164,6 +167,7 @@
                 B20000000000000000000003 /* ControlPanel.swift in Sources */,
                 B20000000000000000000004 /* AutoCalibrator.swift in Sources */,
                 B20000000000000000000005 /* FocusControls.swift in Sources */,
+                B20000000000000000000006 /* VideoRecorder.swift in Sources */,
                 B10000000000000000000007 /* Shaders.metal in Sources */,
             );
             runOnlyForDeploymentPostprocessing = 0;
