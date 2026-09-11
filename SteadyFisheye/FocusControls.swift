@@ -28,16 +28,19 @@ struct FocusReticle: View {
 /// Vertical exposure compensation control, laid out the way the system camera
 /// does it: readout, track with a sun icon underneath, drag to bias.
 ///
-/// While a drag is in flight the thumb is driven by local state instead of by
-/// the value the camera reports back. Feeding a high-rate published value back
-/// into the view that is currently being dragged rebuilds it under the finger
-/// on every event and brings SwiftUI's graph down with it.
+/// The drag is driven entirely by local state and the camera is only told about
+/// the value a few times a second — plus once when the finger lifts. Pushing a
+/// value into the capture device on every touch event, and letting the published
+/// result come back into the view being dragged, is what made this control
+/// unstable.
 struct ExposureSlider: View {
-    @Binding var value: Float
+    let value: Float
     let range: ClosedRange<Float>
+    let onApply: (Float) -> Void
     let onInteraction: () -> Void
 
     @State private var dragValue: Float?
+    @State private var lastApply = Date.distantPast
     @State private var lastPing = Date.distantPast
 
     private var displayed: Float { dragValue ?? value }
@@ -84,18 +87,23 @@ struct ExposureSlider: View {
                             let span = range.upperBound - range.lowerBound
                             let next = range.lowerBound + position * span
                             dragValue = next
-                            value = next
-                            // Keep the auto-hide deadline pushed out while the
-                            // finger is down, but do not schedule a timer per
-                            // drag event.
+
+                            // Four updates a second is smooth enough to aim
+                            // with and cheap enough for the capture device.
                             let now = Date()
+                            if now.timeIntervalSince(lastApply) > 0.25 {
+                                lastApply = now
+                                onApply(next)
+                            }
                             if now.timeIntervalSince(lastPing) > 1.0 {
                                 lastPing = now
                                 onInteraction()
                             }
                         }
                         .onEnded { _ in
+                            let final = dragValue
                             dragValue = nil
+                            if let final = final { onApply(final) }
                             onInteraction()
                         }
                 )

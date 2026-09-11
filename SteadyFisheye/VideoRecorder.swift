@@ -4,7 +4,8 @@ import CoreVideo
 import Photos
 import Combine
 
-/// Records what the app actually shows: the undistorted, stabilised frame.
+/// Records what the app actually shows: the undistorted, stabilised frame, with
+/// sound.
 ///
 /// The same fragment shader that fills the screen is rendered a second time
 /// into IOSurface-backed pixel buffers, which are handed straight to an
@@ -21,11 +22,12 @@ final class VideoRecorder: ObservableObject {
 
     private var writer: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
-    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var videoAdaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var audioInput: AVAssetWriterInput?
     private var pixelPool: CVPixelBufferPool?
     private var fileURL: URL?
     private var sessionStart: CMTime?
-    private var lastAppended = CMTime.invalid
+    private var lastVideoTime = CMTime.invalid
     private var startedAt: Date?
     private var clock: Timer?
 
@@ -41,7 +43,7 @@ final class VideoRecorder: ObservableObject {
     }
 
     @discardableResult
-    func start(size: CGSize) -> Bool {
+    func start(size: CGSize, audioSettings: [String: Any]?) -> Bool {
         guard !isRecording else { return false }
         let width = Int(size.width) & ~1
         let height = Int(size.height) & ~1
@@ -60,7 +62,7 @@ final class VideoRecorder: ObservableObject {
         // H.264 at high profile is the safe choice: HEVC encoding is not
         // guaranteed on every device, and this is a short-clip tool.
         let bitrate = Int(Double(width * height) * 6)
-        let settings: [String: Any] = [
+        let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
@@ -70,13 +72,25 @@ final class VideoRecorder: ObservableObject {
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
             ]
         ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else {
             message = "录像格式不被支持"
             return false
         }
         writer.add(input)
+
+        // Audio is optional: when the microphone was unavailable or refused,
+        // recording still proceeds silently rather than failing.
+        var audio: AVAssetWriterInput?
+        if let audioSettings = audioSettings {
+            let candidate = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            candidate.expectsMediaDataInRealTime = true
+            if writer.canAdd(candidate) {
+                writer.add(candidate)
+                audio = candidate
+            }
+        }
 
         let attributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -99,19 +113,25 @@ final class VideoRecorder: ObservableObject {
         }
 
         guard writer.startWriting() else {
-            message = "录像启动失败"
+            message = "录像启动失败：\(writer.error?.localizedDescription ?? "未知原因")"
+            return false
+        }
+        guard writer.status == .writing else {
+            message = "录像无法开始写入"
             return false
         }
 
-        adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
-                                                       sourcePixelBufferAttributes: attributes)
+        videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: attributes)
         self.writer = writer
         videoInput = input
+        audioInput = audio
         pixelPool = createdPool
         fileURL = url
         recordingSize = CGSize(width: width, height: height)
         sessionStart = nil
-        lastAppended = CMTime.invalid
+        lastVideoTime = CMTime.invalid
         startedAt = Date()
         duration = 0
         message = nil
@@ -134,22 +154,44 @@ final class VideoRecorder: ObservableObject {
     /// Takes plain seconds rather than a `CMTime` so callers outside the
     /// AVFoundation world — the Metal renderer — do not have to import CoreMedia.
     func append(_ buffer: CVPixelBuffer, atSeconds seconds: Double) {
-        guard isRecording, let writer = writer, let input = videoInput,
-              let adaptor = adaptor else { return }
         guard seconds.isFinite, seconds > 0 else { return }
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
-        if sessionStart == nil {
-            sessionStart = time
-            writer.startSession(atSourceTime: .zero)
-        }
-        guard writer.status == .writing, input.isReadyForMoreMediaData,
-              let start = sessionStart else { return }
+        guard beginSessionIfNeeded(at: time) else { return }
+        guard let writer = writer, let input = videoInput,
+              let adaptor = videoAdaptor, let start = sessionStart else { return }
+        // The writer has to be in the writing state before anything is handed
+        // over: startSession and append both raise a hard exception otherwise,
+        // which is exactly the crash a failed encoder used to cause.
+        guard writer.status == .writing, input.isReadyForMoreMediaData else { return }
+        guard CMTimeCompare(time, start) >= 0 else { return }
+        if lastVideoTime.isValid, CMTimeCompare(time, lastVideoTime) <= 0 { return }
+        lastVideoTime = time
+        adaptor.append(buffer, withPresentationTime: time)
+    }
 
-        let relative = CMTimeSubtract(time, start)
-        guard CMTimeCompare(relative, .zero) >= 0 else { return }
-        if lastAppended.isValid, CMTimeCompare(relative, lastAppended) <= 0 { return }
-        lastAppended = relative
-        adaptor.append(buffer, withPresentationTime: relative)
+    /// Audio samples arrive straight from the capture pipeline.
+    ///
+    /// The movie session starts on the first video frame's timestamp and both
+    /// tracks are appended with their original presentation times, so picture
+    /// and sound share one timeline without any re-stamping.
+    func appendAudio(_ sampleBuffer: CMSampleBuffer) {
+        guard isRecording, let writer = writer, let input = audioInput,
+              let start = sessionStart else { return }
+        guard writer.status == .writing, input.isReadyForMoreMediaData else { return }
+        let presentation = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard presentation.isValid, CMTimeCompare(presentation, start) >= 0 else { return }
+        guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+        input.append(sampleBuffer)
+    }
+
+    /// Starts the movie timeline on the first frame that actually arrives.
+    private func beginSessionIfNeeded(at time: CMTime) -> Bool {
+        guard let writer = writer, writer.status == .writing else { return false }
+        if sessionStart == nil {
+            writer.startSession(atSourceTime: time)
+            sessionStart = time
+        }
+        return true
     }
 
     func stop() {
@@ -159,19 +201,24 @@ final class VideoRecorder: ObservableObject {
         duration = 0
 
         let finishingWriter = writer
-        let finishingInput = videoInput
+        let finishingVideo = videoInput
+        let finishingAudio = audioInput
         let url = fileURL
         writer = nil
         videoInput = nil
-        adaptor = nil
+        videoAdaptor = nil
+        audioInput = nil
         pixelPool = nil
         fileURL = nil
         sessionStart = nil
+        lastVideoTime = CMTime.invalid
         recordingSize = .zero
 
-        // Mark the input finished on the captured reference; clearing the
-        // properties first would make this a no-op and leave the file open.
-        finishingInput?.markAsFinished()
+        // Mark the inputs finished on the captured references; clearing the
+        // properties first would make these no-ops and leave the file open.
+        finishingVideo?.markAsFinished()
+        finishingAudio?.markAsFinished()
+
         guard let finishingWriter = finishingWriter, let url = url else { return }
         finishingWriter.finishWriting { [weak self] in
             DispatchQueue.main.async {
@@ -179,7 +226,8 @@ final class VideoRecorder: ObservableObject {
                 if finishingWriter.status == .completed {
                     self.saveToPhotos(url: url)
                 } else {
-                    self.message = "录像保存失败"
+                    let reason = finishingWriter.error?.localizedDescription ?? "未知原因"
+                    self.message = "录像保存失败：\(reason)"
                 }
             }
         }

@@ -19,11 +19,13 @@ struct ContentView: View {
     /// Where the last tap landed, in preview coordinates, for the reticle.
     @State private var focusPoint: CGPoint?
     @State private var showExposure = false
-    @State private var focusToken = 0
     @State private var ignoreNextTap = false
     @State private var renderer: MetalRenderer?
     @State private var toast: String?
-    @State private var toastToken = 0
+    /// Held in a reference box: bumping a plain `@State` on every drag event
+    /// invalidates the whole view, which is not something a slider should do.
+    @State private var tokens = CancellationTokens()
+    @State private var containerSize = CGSize(width: 393, height: 852)
 
     var body: some View {
         ZStack {
@@ -59,10 +61,9 @@ struct ContentView: View {
                     .allowsHitTesting(false)
 
                 if showExposure {
-                    ExposureSlider(value: Binding(
-                                    get: { camera.exposureBias },
-                                    set: { camera.setExposureBias($0) }),
+                    ExposureSlider(value: camera.exposureBias,
                                    range: camera.exposureBiasRange,
+                                   onApply: { camera.setExposureBias($0) },
                                    onInteraction: { scheduleFocusHide() })
                         .position(exposureSliderPosition(for: point))
                 }
@@ -145,16 +146,38 @@ struct ContentView: View {
             // The preview is the product: the screen must not dim while the
             // user is framing a shot.
             UIApplication.shared.isIdleTimerDisabled = true
+            // Audio from the capture pipeline goes straight into the recorder.
+            camera.onAudioSample = { [weak recorder] buffer in
+                recorder?.appendAudio(buffer)
+            }
             app.start()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
+            camera.onAudioSample = nil
             if recorder.isRecording { recorder.stop() }
             app.stop()
         }
         .onChange(of: recorder.message) { value in
             if let value = value { showToast(value) }
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { containerSize = geo.size }
+                    .onChange(of: geo.size) { containerSize = $0 }
+            }
+        )
+    }
+
+    /// Tiny box so token bumps do not invalidate the view.
+    final class CancellationTokens {
+        private var value = 0
+        func bump() -> Int {
+            value += 1
+            return value
+        }
+        func isCurrent(_ token: Int) -> Bool { token == value }
     }
 
     // MARK: - Recording
@@ -168,7 +191,7 @@ struct ContentView: View {
             showToast("渲染器还没准备好")
             return
         }
-        if !recorder.start(size: size) {
+        if !recorder.start(size: size, audioSettings: camera.audioWriterSettings) {
             showToast(recorder.message ?? "录像启动失败")
         }
     }
@@ -179,11 +202,10 @@ struct ContentView: View {
     }
 
     private func showToast(_ text: String) {
-        toastToken += 1
-        let token = toastToken
+        let token = tokens.bump()
         withAnimation(.easeOut(duration: 0.2)) { toast = text }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            guard token == toastToken else { return }
+            guard tokens.isCurrent(token) else { return }
             withAnimation(.easeOut(duration: 0.3)) { toast = nil }
         }
     }
@@ -225,7 +247,8 @@ struct ContentView: View {
         ignoreNextTap = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { ignoreNextTap = false }
         if locked, focusPoint == nil {
-            let center = CGPoint(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY)
+            let center = CGPoint(x: containerSize.width * 0.5,
+                                 y: containerSize.height * 0.5)
             withAnimation(.easeOut(duration: 0.15)) { focusPoint = center }
         }
         scheduleFocusHide()
@@ -233,27 +256,27 @@ struct ContentView: View {
 
     /// The reticle disappears quickly; the exposure slider lingers, then goes.
     private func scheduleFocusHide() {
-        focusToken += 1
-        let token = focusToken
+        let token = tokens.bump()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
-            guard token == focusToken else { return }
+            guard tokens.isCurrent(token) else { return }
             withAnimation(.easeOut(duration: 0.3)) {
                 focusPoint = nil
                 showExposure = false
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) {
-            guard token == focusToken else { return }
+            guard tokens.isCurrent(token) else { return }
             withAnimation(.easeOut(duration: 0.3)) { showExposure = false }
         }
     }
 
     /// Keeps the slider on screen beside the reticle.
     private func exposureSliderPosition(for point: CGPoint) -> CGPoint {
-        let screen = UIScreen.main.bounds.size
-        let wantsRight = point.x + 62 + 46 < screen.width
+        let wantsRight = point.x + 62 + 46 < containerSize.width
         let x = wantsRight ? point.x + 62 + 46 : max(point.x - 62 - 46, 46)
-        return CGPoint(x: x, y: min(max(point.y, 100), screen.height - 110))
+        let boundedX = min(max(x, 46), max(containerSize.width - 46, 46))
+        return CGPoint(x: boundedX,
+                       y: min(max(point.y, 100), max(containerSize.height - 110, 100)))
     }
 
     // MARK: - Status bar

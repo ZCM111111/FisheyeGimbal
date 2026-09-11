@@ -239,11 +239,6 @@ struct ControlPanel: View {
     private var stabilizationGroup: some View {
         PanelSection(title: "防抖", expanded: $showStabilization) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
-                // The travel budget is spent before the view size is chosen, so
-                // raising it costs field of view but buys locked range.
-                IndustrialSlider(title: "锁定行程", unit: "°", digits: 0,
-                                 value: $settings.lockTravelDegrees, range: 3...30)
-
                 if motion.mode == .follow {
                     IndustrialSlider(title: "跟随时间", unit: "秒", digits: 2,
                                      value: Binding(get: { Float(motion.dampingTime) },

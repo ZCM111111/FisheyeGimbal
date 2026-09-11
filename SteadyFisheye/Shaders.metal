@@ -92,8 +92,6 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     float hazeCompensation = clamp(u.finishing.y, 0.0, 1.0);
     // 1 = fill the screen (never leave black), 0 = fit the requested view
     float fillScreen = clamp(u.finishing.z, 0.0, 1.0);
-    // Radians of lock travel to keep in reserve around the frame. See below.
-    float travel = clamp(u.finishing.w, 0.0, 0.6);
 
     // The output is a pinhole camera in locked-camera coordinates.
     // A portrait phone screen is far taller than wide, so the field of view is
@@ -101,19 +99,17 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     //
     // Filling takes the wider of two constraints:
     //   * the view the user asked for, and
-    //   * the widest view that still leaves `travel` radians of clearance
-    //     between the corner ray and the edge of the lens.
-    //
-    // That clearance is what the stabiliser spends when it holds the view while
-    // the phone is panned. Without reserving it, a frame that fills the whole
-    // image circle would leave no travel at all and the lock would start
-    // following the hand after a couple of degrees.
+    //   * the widest view whose corner ray still lands inside the lens circle.
+    // A larger focal means a narrower view, so taking the maximum means the
+    // frame is always completely covered: asking for more field of view than
+    // the glass can fill simply stops at the rim instead of painting black
+    // wedges around the image circle.
     float2 pixel = in.uv * viewSize;
     float2 halfSize = viewSize * 0.5;
     float requestedFocal = halfSize.x / max(tan(outputFov * 0.5), 0.001);
     // Stay clear of 90 degrees: tan() explodes there and a fisheye rim maps to
     // an unbounded rectilinear radius.
-    float cornerTheta = min(max(maxTheta - travel, 0.09), 1.36);
+    float cornerTheta = min(maxTheta, 1.36);
     float cornerFocal = length(halfSize) / max(tan(cornerTheta), 0.001);
     float focalOut = fillScreen > 0.5
         ? max(requestedFocal, cornerFocal)

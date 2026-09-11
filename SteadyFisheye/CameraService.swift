@@ -27,6 +27,13 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     let session = AVCaptureSession()
 
+    /// Settings the asset writer needs for the microphone, or nil when there is
+    /// no usable audio input.
+    var audioWriterSettings: [String: Any]? { audioSettings }
+
+    /// Delivers captured audio to the recorder.
+    var onAudioSample: ((CMSampleBuffer) -> Void)?
+
     @Published private(set) var running = false
     @Published private(set) var lens: Lens = .ultraWide
     @Published private(set) var formatText = "无摄像头"
@@ -50,6 +57,9 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     /// Read from the capture queue; `aeafLocked` is the main-thread mirror.
     private var aeafLockedSnapshot = false
+    private var microphoneInput: AVCaptureDeviceInput?
+    private var audioOutput: AVCaptureAudioDataOutput?
+    private var audioSettings: [String: Any]?
     /// The device currently feeding the session, kept so focus, exposure and
     /// bias can be driven after configuration has finished.
     private var activeDevice: AVCaptureDevice?
@@ -79,6 +89,8 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                                               qos: .userInitiated)
     private let videoQueue = DispatchQueue(label: "steadyfisheye.camera.video",
                                            qos: .userInitiated)
+    private let audioQueue = DispatchQueue(label: "steadyfisheye.camera.audio",
+                                           qos: .userInitiated)
     private var selectedLens: Lens = .ultraWide
     private var configured = false
     private var output: AVCaptureVideoDataOutput?
@@ -87,6 +99,15 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private var lastFPSPublishTime: Double = 0
 
     static func requestAccess(completion: @escaping (Bool) -> Void) {
+        // Ask for the microphone first so the audio input can be part of the
+        // very first session configuration. Capture access is the one the app
+        // cannot work without, so its answer is what gets reported back.
+        AVCaptureDevice.requestAccess(for: .audio) { _ in
+            requestVideoAccess(completion: completion)
+        }
+    }
+
+    private static func requestVideoAccess(completion: @escaping (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             DispatchQueue.main.async { completion(true) }
@@ -204,12 +225,8 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     }
 
     /// Exposure compensation. The slider emits events far faster than the
-    /// capture device should be reconfigured, so superseded values are dropped
-    /// and only the newest one within each short window reaches the hardware.
-    ///
-    /// `setExposureTargetBias` is documented as not needing the configuration
-    /// lock, so it is deliberately left on that path rather than wrapped in
-    /// `withDevice` along with the mode changes.
+    /// capture device should be reconfigured, and the UI only calls this a few
+    /// times a second while dragging plus once on release.
     func setExposureBias(_ value: Float) {
         biasLock.lock()
         pendingBias = value
@@ -235,15 +252,21 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             self.biasApplyScheduled = false
             self.biasLock.unlock()
 
-            guard let latest = latest, let device = self.activeDevice else { return }
-            let low = device.minExposureTargetBias
-            let high = max(device.maxExposureTargetBias, low)
-            let clamped = min(max(latest, low), high)
-            device.setExposureTargetBias(clamped, completionHandler: nil)
+            guard let latest = latest, latest.isFinite else { return }
+            var applied: Float?
+            self.withDevice { device in
+                let low = Self.saneBias(device.minExposureTargetBias, fallback: -8)
+                let high = max(Self.saneBias(device.maxExposureTargetBias, fallback: 8), low)
+                let clamped = min(max(latest, low), high)
+                guard clamped.isFinite else { return }
+                device.setExposureTargetBias(clamped, completionHandler: nil)
+                applied = clamped
+            }
 
             // Publish at most a few times a second. Each publish rebuilds every
             // view that reads the bias — including the slider the finger is on
             // — and doing that once per drag event is what took the UI down.
+            guard let clamped = applied else { return }
             let now = CACurrentMediaTime()
             guard now - self.lastBiasPublish > 0.08 else { return }
             self.lastBiasPublish = now
@@ -251,6 +274,14 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                 self.exposureBias = clamped
             }
         }
+    }
+
+    /// Device-reported limits are used to clamp the bias, so a NaN or an
+    /// absurd value from a quirky lens would otherwise be forwarded straight
+    /// into `setExposureTargetBias`, which rejects out-of-range input.
+    private static func saneBias(_ value: Float, fallback: Float) -> Float {
+        guard value.isFinite, abs(value) < 100 else { return fallback }
+        return value
     }
 
     /// Long-pressing takes the same meaning it has in the system camera: the
@@ -346,9 +377,10 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             // is forced to be at least the lower one: building a ClosedRange
             // with upper < lower traps at runtime, and a device that reports
             // inconsistent limits would otherwise take the whole app down.
-            let low = device.minExposureTargetBias
-            let high = max(device.maxExposureTargetBias, low)
-            let initialBias = min(max(device.exposureTargetBias, low), high)
+            let low = Self.saneBias(device.minExposureTargetBias, fallback: -8)
+            let high = max(Self.saneBias(device.maxExposureTargetBias, fallback: 8), low)
+            let initialBias = min(max(Self.saneBias(device.exposureTargetBias, fallback: 0), low),
+                                  high)
             DispatchQueue.main.async { [weak self] in
                 self?.exposureBiasRange = low...high
                 self?.exposureBias = initialBias
@@ -390,8 +422,37 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             connection.isVideoMirrored = false
         }
 
+        // Microphone, so recordings carry sound. Added only when access is
+        // already granted: an audio input that the system refuses would take
+        // the whole session down with it, and silent video beats no video.
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+           let microphone = AVCaptureDevice.default(for: .audio),
+           let audioInput = try? AVCaptureDeviceInput(device: microphone),
+           session.canAddInput(audioInput) {
+            session.addInput(audioInput)
+            let audioOutput = AVCaptureAudioDataOutput()
+            audioOutput.setSampleBufferDelegate(self, queue: audioQueue)
+            if session.canAddOutput(audioOutput) {
+                session.addOutput(audioOutput)
+                microphoneInput = audioInput
+                self.audioOutput = audioOutput
+                audioWriterSettings = audioOutput.recommendedAudioSettingsForAssetWriter(
+                    writingTo: .mp4)
+            }
+        }
+
         session.commitConfiguration()
         configured = true
+
+        if microphoneInput != nil {
+            // The capture session drives the microphone, so the audio session
+            // has to allow recording before the session starts running.
+            let audioSession = AVAudioSession.sharedInstance()
+            try? audioSession.setCategory(.playAndRecord,
+                                          mode: .videoRecording,
+                                          options: [.defaultToSpeaker, .allowBluetooth])
+            try? audioSession.setActive(true)
+        }
         let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let format = "\(dimensions.width)x\(dimensions.height) · " + fourCC(pixelFormat)
         let effectiveLens: Lens = device.deviceType == .builtInUltraWideCamera ? .ultraWide : .wide
@@ -475,6 +536,12 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        // Audio arrives on its own output and queue; it only needs to reach the
+        // recorder, and it must never fall through into the video path.
+        if output is AVCaptureAudioDataOutput {
+            onAudioSample?(sampleBuffer)
+            return
+        }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         let captureTime = timestamp.isFinite ? timestamp : CACurrentMediaTime()
