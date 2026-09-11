@@ -146,6 +146,9 @@ struct ContentView: View {
             // The preview is the product: the screen must not dim while the
             // user is framing a shot.
             UIApplication.shared.isIdleTimerDisabled = true
+            // Ask for the photo library now rather than at the end of the first
+            // recording, where the prompt would interrupt the save.
+            recorder.preparePhotoAccess()
             // Audio from the capture pipeline goes straight into the recorder.
             // Hopped to the main thread because all recorder state lives there,
             // and appending from the audio queue would race with stop().
