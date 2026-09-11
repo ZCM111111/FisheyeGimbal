@@ -34,6 +34,7 @@ private final class SourceFrame {
         self.textures = textures
         self.wrappers = wrappers
         self.format = format
+        self.timestamp = timestamp
         self.size = size
     }
 }
