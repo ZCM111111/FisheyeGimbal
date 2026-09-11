@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cabinet_detect  # noqa: E402
 
 MAX_FRAMES = 240
+VIDEO_FPS = 30.0
 DETECT_WIDTH = 480          # detection cost is per frame; accuracy is unaffected
 
 
@@ -37,16 +38,22 @@ def frames_from_video(path):
     if not capture.isOpened():
         print("cannot open", path)
         return []
+    global VIDEO_FPS
+    reported = capture.get(cv2.CAP_PROP_FPS)
+    if reported and reported > 1:
+        VIDEO_FPS = float(reported)
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     step = max(1, total // MAX_FRAMES) if total > 0 else 1
     frames = []
+    sampled = 0
     index = 0
     while True:
-        ok = capture.read()
-        if not ok[0]:
+        ok, frame = capture.read()
+        if not ok:
             break
         if index % step == 0:
-            frames.append(ok[1])
+            frames.append(frame)
+            sampled += index // step if index else 0
         index += 1
         if total > 0 and index >= total:
             break
@@ -66,10 +73,34 @@ def frames_from_folder(path):
     return frames
 
 
+def content_box(frame, threshold=14):
+    """Trim the letterboxing.
+
+    Screen recordings are usually a portrait clip parked inside a landscape
+    frame. Measuring the black bars as picture is how the detector ends up
+    circling the whole panel, which is exactly what happened the first time this
+    ran on a phone recording.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Column and row means, not "any bright pixel": a clip with a caption or a
+    # timeline strip still has near-black bars, and mean brightness finds those
+    # bars while a single bright pixel would defeat the whole crop.
+    column_mean = gray.mean(axis=0)
+    row_mean = gray.mean(axis=1)
+    floor = max(threshold, 0.06 * 255)
+    columns = np.where(column_mean > floor)[0]
+    rows = np.where(row_mean > floor)[0]
+    if len(columns) < 8 or len(rows) < 8:
+        return frame
+    return frame[rows[0]:rows[-1] + 1, columns[0]:columns[-1] + 1]
+
+
 def analyse(frames, label, montage_path=None, consecutive=True):
     if not frames:
         return
+    frames = [content_box(frame) for frame in frames]
     height, width = frames[0].shape[:2]
+    print(f"   content           {width}x{height} px (letterboxing trimmed)")
     short = float(min(width, height))
     results = []
 
@@ -109,7 +140,7 @@ def analyse(frames, label, montage_path=None, consecutive=True):
         # Only meaningful between consecutive frames: a folder of unrelated
         # stills would report the movement between shots, not drift within one.
         steps = np.hypot(np.diff(xs), np.diff(ys))
-        duration = max(indices[-1] - indices[0] + 1, 1) / 30.0
+        duration = max(indices[-1] - indices[0] + 1, 1) / VIDEO_FPS
         rate = float(steps.sum() / duration)
         print(f"   drift rate        {rate:.1f} px/s  ({100 * rate / short:.2f}%/s)")
     print(f"   distance from mid {offset:.1f} px  ({100 * offset / short:.2f}%)")
