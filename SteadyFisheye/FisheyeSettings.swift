@@ -56,6 +56,23 @@ final class FisheyeSettings: ObservableObject {
     @Published var localContrast: Float = 0.10
     @Published var hazeCompensation: Float = 0.05
 
+    /// Writes an automatic calibration back into the live parameters.
+    ///
+    /// Circle geometry is always taken, because it is measured rather than
+    /// fitted. The distortion terms are only replaced when the fit genuinely
+    /// straightened the picture, so a failed calibration cannot make things
+    /// worse than the user's current settings.
+    func apply(_ outcome: AutoCalibrator.Outcome) {
+        if outcome.circleFound {
+            centerX = min(max(outcome.centerX, -0.25), 0.25)
+            centerY = min(max(outcome.centerY, -0.25), 0.25)
+            circleScale = min(max(outcome.circleScale, 0.4), 1.6)
+        }
+        guard outcome.applied else { return }
+        k1 = min(max(outcome.k1, -0.35), 0.35)
+        lensHalfFov = min(max(outcome.lensHalfFovDegrees, 45), 120)
+    }
+
     func resetLens() {
         projection = .equidistant
         lensHalfFov = 90

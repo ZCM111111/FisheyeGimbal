@@ -9,6 +9,9 @@ struct ControlPanel: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
+    let autoCalibrating: Bool
+    let calibrationReport: String?
+    let onAutoCalibrate: () -> Void
     let dismiss: () -> Void
 
     @State private var showGeometry = true
@@ -25,6 +28,7 @@ struct ControlPanel: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: Theme.sp5) {
                     telemetry
+                    autoCalibration
                     cameraGroup
                     geometryGroup
                     finishGroup
@@ -108,6 +112,45 @@ struct ControlPanel: View {
         .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
     }
 
+    // MARK: - One-tap calibration
+
+    /// The primary action. Measuring the lens beats asking the user to guess
+    /// distortion coefficients, so this sits above everything else.
+    private var autoCalibration: some View {
+        VStack(alignment: .leading, spacing: Theme.sp2) {
+            Button(action: onAutoCalibrate) {
+                HStack(spacing: Theme.sp2) {
+                    if autoCalibrating {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Text(autoCalibrating ? "正在标定…" : "一键自动标定")
+                        .font(Theme.label(13))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .foregroundColor(autoCalibrating ? Theme.textSecondary : Theme.onAccent)
+                .padding(.horizontal, Theme.sp3)
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+                .background(autoCalibrating ? Theme.surface2 : Theme.accent,
+                            in: RoundedRectangle(cornerRadius: Theme.rBase))
+            }
+            .buttonStyle(.plain)
+            .disabled(autoCalibrating)
+
+            Text(calibrationReport ?? "对着有长直线的场景（门框、桌沿、屏幕边框）按一下，自动测成像圈与畸变。")
+                .font(Theme.label(10))
+                .tracking(0.2)
+                .foregroundColor(calibrationReport == nil ? Theme.textTertiary : Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Groups
 
     private var cameraGroup: some View {
@@ -166,7 +209,7 @@ struct ControlPanel: View {
     }
 
     private var calibrationGroup: some View {
-        PanelSection(title: "手动标定", expanded: $showCalibration) {
+        PanelSection(title: "手动微调", expanded: $showCalibration) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
                 IndustrialSlider(title: "径向 K1", unit: "", digits: 3,
                                  value: $settings.k1, range: -0.35...0.35)

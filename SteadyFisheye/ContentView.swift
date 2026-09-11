@@ -50,6 +50,9 @@ struct ContentView: View {
                         ControlPanel(settings: settings,
                                      motion: motion,
                                      camera: camera,
+                                     autoCalibrating: app.isCalibrating,
+                                     calibrationReport: app.calibrationReport,
+                                     onAutoCalibrate: { app.runAutoCalibration() },
                                      dismiss: {
                                          withAnimation(.easeOut(duration: 0.2)) {
                                              showControls = false
