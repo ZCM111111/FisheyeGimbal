@@ -40,7 +40,7 @@ final class CameraApp: ObservableObject {
         isCentering = true
         centerReport = nil
 
-        camera.requestLumaGrid { [weak self] grid in
+        camera.requestFrameGrid { [weak self] grid in
             let result = grid.map { LensCircleMeasurer.measure(grid: $0) }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -73,16 +73,28 @@ final class CameraApp: ObservableObject {
         guard !isAligning, started else { return }
         isAligning = true
         alignReport = nil
+        alignPass(remaining: 2)
+    }
 
-        camera.requestLumaGrid { [weak self] grid in
+    /// Two passes on purpose: the first one centres a ring that the wide lens
+    /// has distorted into a slightly non-circular shape, and once it is centred
+    /// that distortion is gone, so the second measurement lands closer.
+    private func alignPass(remaining: Int) {
+        camera.requestFrameGrid { [weak self] grid in
             // Only the detection runs off the main thread: it is pure CPU work
             // over a local grid, with no shared state.
-            let result = grid.map { CabinetDetector.detect(grid: $0) }
+            //
+            // The first pass is deliberately lenient about the ring's
+            // roundness: it runs on the raw fisheye frame, where a ring away
+            // from the centre is stretched out of shape. Once centred, the
+            // second pass sees a true circle and can be strict.
+            let limit: Float = remaining > 1 ? 0.45 : 0.28
+            let result = grid.map { CabinetDetector.detect(grid: $0, spreadLimit: limit) }
             let sourceSize = grid?.sourceSize
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.isAligning = false
                 guard let result = result, let sourceSize = sourceSize else {
+                    self.isAligning = false
                     self.alignReport = "读不到画面，确认相机在出图"
                     return
                 }
@@ -90,11 +102,17 @@ final class CameraApp: ObservableObject {
                       let direction = self.settings.cameraDirection(
                         forSourcePixel: result.centerPixel,
                         sourceSize: sourceSize) else {
+                    self.isAligning = false
                     self.alignReport = result.summary
                     return
                 }
                 self.motion.reLock(lookingAlong: direction)
-                self.alignReport = "已对准 · " + result.summary
+                if remaining > 1 {
+                    self.alignPass(remaining: remaining - 1)
+                } else {
+                    self.isAligning = false
+                    self.alignReport = "已对准 · " + result.summary
+                }
             }
         }
     }

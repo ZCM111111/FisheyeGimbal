@@ -2,17 +2,17 @@ import Foundation
 import CoreGraphics
 import simd
 
-/// Finds the maimai cabinet in a frame.
+/// Finds the maimai cabinet by its lit button ring.
 ///
-/// No machine learning here: the cabinet is a large lit disc in a dim arcade,
-/// which is exactly the case Otsu's method plus a connected component handles
-/// well. The disc's centre and semi-axes come straight out of the second
-/// moments of the region, so there is nothing iterative to go wrong.
+/// The first attempt here looked for the brightest blob in the frame, and real
+/// footage killed it outright: in one shot a lit wall won, in another the white
+/// cabinet shell did. What survives across idle and mid-song frames is the ring
+/// of eight lit buttons — saturated, always on, and arranged in a circle. Fitting
+/// a circle through their centres both finds the cabinet and proves it was found,
+/// because clutter that happens to be violet does not sit on a ring.
 ///
-/// What the centre is used for is alignment, not distortion correction: a wide
-/// lens stretches whatever sits away from the middle of the frame, so a cabinet
-/// that is off-centre looks distorted no matter how round its screen is. Putting
-/// its centre on the optical axis is what removes that.
+/// Thresholds below are the ones measured against real photos; the violet test
+/// is deliberately loose and the shape gate is what rejects the noise.
 enum CabinetDetector {
 
     struct Result {
@@ -22,17 +22,25 @@ enum CabinetDetector {
         var centerY: Float = 0
         /// The same centre in source pixels, ready for the lens model.
         var centerPixel = SIMD2<Float>(0, 0)
-        /// Semi-axes normalised by the short side.
-        var radiusX: Float = 0
-        var radiusY: Float = 0
-        var angle: Float = 0
-        /// Region area over the area of a matching ellipse: 1 means a clean disc.
-        var fill: Float = 0
-        var areaFraction: Float = 0
+        /// Ring radius, normalised by the short side.
+        var radius: Float = 0
+        var blobs = 0
+        var spread: Float = 0
+        var coverage: Float = 0
         var summary = ""
     }
 
-    static func detect(grid: LensCircleMeasurer.LumaGrid) -> Result {
+    // Measured on real footage: min(Cr-128, Cb-128) > 4 and Y > 90 found the
+    // buttons in every frame tested.
+    private static let violetThreshold: Float = 4
+    private static let lumaFloor: Float = 90
+    private static let minimumBlobArea = 4
+    private static let maximumBlobArea = 1400
+    private static let minimumBlobs = 5
+    private static let maximumSpread: Float = 0.28
+    private static let minimumCoverage: Float = 200
+
+    static func detect(grid: FrameGrid, spreadLimit: Float = maximumSpread) -> Result {
         var result = Result()
         let width = grid.width
         let height = grid.height
@@ -42,157 +50,200 @@ enum CabinetDetector {
         }
         let shortSide = Float(min(width, height))
 
-        let threshold = otsuThreshold(grid.lum)
-        guard threshold > 4 else {
-            result.summary = "画面太暗或没有明暗差异，找不到机台"
-            return result
+        // Violet mask.
+        var mask = [Bool](repeating: false, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let index = y * width + x
+                mask[index] = grid.violetness(x, y) > violetThreshold
+                    && grid.lum[index] > lumaFloor
+            }
         }
+        mask = open(mask, width: width, height: height)
 
-        // Largest bright region.
+        // Blob centroids, 8-connected: the buttons are solid patches.
         var visited = [Bool](repeating: false, count: width * height)
-        var best: [Int] = []
         var stack: [Int] = []
-        for start in 0..<(width * height) where !visited[start] && grid.lum[start] >= threshold {
+        var centers: [SIMD2<Float>] = []
+        for start in 0..<(width * height) where mask[start] && !visited[start] {
             stack.removeAll(keepingCapacity: true)
             stack.append(start)
             visited[start] = true
-            var region: [Int] = []
+            var sumX: Float = 0
+            var sumY: Float = 0
+            var count = 0
             while let index = stack.popLast() {
-                region.append(index)
                 let x = index % width
                 let y = index / width
-                // 4-connected: diagonal leaks would join the cabinet to a
-                // neighbouring bright panel.
-                if x > 0 { push(index - 1, &stack, &visited, grid.lum, threshold) }
-                if x < width - 1 { push(index + 1, &stack, &visited, grid.lum, threshold) }
-                if y > 0 { push(index - width, &stack, &visited, grid.lum, threshold) }
-                if y < height - 1 { push(index + width, &stack, &visited, grid.lum, threshold) }
+                sumX += Float(x)
+                sumY += Float(y)
+                count += 1
+                for dy in -1...1 {
+                    for dx in -1...1 where !(dx == 0 && dy == 0) {
+                        let nx = x + dx
+                        let ny = y + dy
+                        guard nx >= 0, nx < width, ny >= 0, ny < height else { continue }
+                        let neighbour = ny * width + nx
+                        guard mask[neighbour], !visited[neighbour] else { continue }
+                        visited[neighbour] = true
+                        stack.append(neighbour)
+                    }
+                }
             }
-            if region.count > best.count { best = region }
+            if count >= minimumBlobArea, count <= maximumBlobArea {
+                centers.append(SIMD2<Float>(sumX / Float(count), sumY / Float(count)))
+            }
         }
 
-        let total = Float(width * height)
-        guard !best.isEmpty else {
-            result.summary = "没找到发亮的区域，对着机台再试"
-            return result
-        }
-        let areaFraction = Float(best.count) / total
-        guard areaFraction > 0.02 else {
-            result.summary = "亮区太小，可能是远处的灯而不是机台"
-            return result
-        }
-        guard areaFraction < 0.60 else {
-            result.summary = "亮区几乎占满画面，判断不出机台边界"
+        result.blobs = centers.count
+        guard centers.count >= minimumBlobs else {
+            result.summary = "只找到 \(centers.count) 个按键色块，对着机台再试"
             return result
         }
 
-        // First and second moments.
-        var sumX: Float = 0, sumY: Float = 0
-        for index in best {
-            sumX += Float(index % width)
-            sumY += Float(index / width)
+        // Circle fit with iterative outlier rejection: one stray violet object
+        // is enough to spoil a plain least-squares fit, and rejecting it is what
+        // turns 10/12 frames into 12/12.
+        var points = centers
+        var center = SIMD2<Float>(Float(width) * 0.5, Float(height) * 0.5)
+        var radius: Float = 0
+        for _ in 0..<3 {
+            guard let fitted = fitCircle(points) else {
+                result.summary = "圆环拟合失败"
+                return result
+            }
+            center = fitted.center
+            radius = fitted.radius
+            let distances = points.map { simd_distance($0, center) }
+            let mean = distances.reduce(0, +) / Float(distances.count)
+            let tolerance = max(0.28 * mean, 3)
+            let kept = zip(points, distances)
+                .filter { abs($0.1 - mean) <= tolerance }
+                .map { $0.0 }
+            if kept.count == points.count || kept.count < minimumBlobs { break }
+            points = kept
         }
-        let count = Float(best.count)
-        let meanX = sumX / count, meanY = sumY / count
-        var mu20: Float = 0, mu02: Float = 0, mu11: Float = 0
-        for index in best {
-            let dx = Float(index % width) - meanX
-            let dy = Float(index / width) - meanY
-            mu20 += dx * dx
-            mu02 += dy * dy
-            mu11 += dx * dy
+
+        let distances = points.map { simd_distance($0, center) }
+        let mean = distances.reduce(0, +) / Float(distances.count)
+        let variance = distances.map { ($0 - mean) * ($0 - mean) }.reduce(0, +)
+            / Float(distances.count)
+        let spread = mean > 0 ? variance.squareRoot() / mean : 1
+
+        // Angular coverage: violet clutter all in one corner must not pass.
+        var angles = points.map { atan2($0.y - center.y, $0.x - center.x) }
+        angles.sort()
+        var biggestGap: Float = 0
+        for index in 0..<angles.count {
+            let next = angles[(index + 1) % angles.count]
+            let gap = index == angles.count - 1
+                ? (next + 2 * .pi) - angles[index]
+                : next - angles[index]
+            biggestGap = max(biggestGap, gap)
         }
-        mu20 /= count
-        mu02 /= count
-        mu11 /= count
+        let coverage = 360 - biggestGap * 180 / .pi
 
-        // Eigen-decomposition of the 2x2 covariance: for a filled ellipse the
-        // variance along an axis is (semi-axis)^2 / 4.
-        let trace = mu20 + mu02
-        let delta = ((mu20 - mu02) * (mu20 - mu02) + 4 * mu11 * mu11).squareRoot()
-        let lambda1 = max((trace + delta) * 0.5, 0.0001)
-        let lambda2 = max((trace - delta) * 0.5, 0.0001)
-        let semiMajor = 2 * lambda1.squareRoot()
-        let semiMinor = 2 * lambda2.squareRoot()
-        let angle = 0.5 * atan2(2 * mu11, mu20 - mu02)
-
-        let ellipseArea = Float.pi * semiMajor * semiMinor
-        let fill = ellipseArea > 0 ? count / ellipseArea : 0
-
-        result.centerX = (meanX - Float(width) * 0.5) / shortSide
-        result.centerY = (meanY - Float(height) * 0.5) / shortSide
+        result.centerX = (center.x - Float(width) * 0.5) / shortSide
+        result.centerY = (center.y - Float(height) * 0.5) / shortSide
         let scaleX = Float(grid.sourceSize.width) / Float(width)
         let scaleY = Float(grid.sourceSize.height) / Float(height)
-        result.centerPixel = SIMD2<Float>(meanX * scaleX, meanY * scaleY)
-        result.radiusX = semiMajor / shortSide
-        result.radiusY = semiMinor / shortSide
-        result.angle = angle
-        result.fill = fill
-        result.areaFraction = areaFraction
+        result.centerPixel = SIMD2<Float>(center.x * scaleX, center.y * scaleY)
+        result.radius = radius / shortSide
+        result.spread = spread
+        result.coverage = coverage
+        result.blobs = points.count
 
-        guard fill > 0.72 else {
-            result.summary = String(format: "亮区形状不规整（填充率 %.2f），不像机台圆盘", Double(fill))
+        guard spread <= spreadLimit else {
+            result.summary = String(format: "按键半径离散度 %.2f 太大，不像圆环", Double(spread))
             return result
         }
-        guard semiMinor / max(semiMajor, 1) > 0.45 else {
-            result.summary = "亮区太扁，看看是不是斜着拍的"
+        guard coverage >= minimumCoverage else {
+            result.summary = String(format: "按键只覆盖 %.0f° 的圆环", Double(coverage))
             return result
         }
 
         result.found = true
-        result.summary = String(format: "机台圆心偏移 (%+.3f, %+.3f) · 半径 %.2f · 填充 %.2f",
+        result.summary = String(format: "按键 %d 个 · 偏移 (%+.3f, %+.3f) · 环半径 %.2f · 离散 %.2f",
+                                points.count,
                                 Double(result.centerX), Double(result.centerY),
-                                Double(result.radiusX), Double(fill))
+                                Double(result.radius), Double(spread))
         return result
     }
 
-    private static func push(_ index: Int,
-                             _ stack: inout [Int],
-                             _ visited: inout [Bool],
-                             _ lum: [Float],
-                             _ threshold: Float) {
-        guard !visited[index], lum[index] >= threshold else { return }
-        visited[index] = true
-        stack.append(index)
-    }
-
-    /// Otsu's method: the threshold that best separates the histogram into two
-    /// groups, which suits a lit screen against a dim room.
-    private static func otsuThreshold(_ lum: [Float]) -> Float {
-        var histogram = [Int](repeating: 0, count: 256)
-        var minimum: Float = 255, maximum: Float = 0
-        for value in lum {
-            let clamped = min(max(value, 0), 255)
-            histogram[Int(clamped)] += 1
-            minimum = min(minimum, clamped)
-            maximum = max(maximum, clamped)
-        }
-        let total = lum.count
-        guard total > 0, maximum - minimum > 8 else { return 0 }
-
-        var sum: Double = 0
-        for index in 0..<256 { sum += Double(index * histogram[index]) }
-
-        var sumBackground: Double = 0
-        var weightBackground = 0
-        var bestVariance: Double = 0
-        var bestThreshold = Int(minimum)
-
-        for index in 0..<256 {
-            weightBackground += histogram[index]
-            if weightBackground == 0 { continue }
-            let weightForeground = total - weightBackground
-            if weightForeground == 0 { break }
-            sumBackground += Double(index * histogram[index])
-            let meanBackground = sumBackground / Double(weightBackground)
-            let meanForeground = (sum - sumBackground) / Double(weightForeground)
-            let difference = meanBackground - meanForeground
-            let variance = Double(weightBackground) * Double(weightForeground) * difference * difference
-            if variance > bestVariance {
-                bestVariance = variance
-                bestThreshold = index
+    /// 3x3 open: drops single-pixel chroma noise before blob analysis.
+    private static func open(_ mask: [Bool], width: Int, height: Int) -> [Bool] {
+        var eroded = mask
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let index = y * width + x
+                guard mask[index] else { continue }
+                var all = true
+                for dy in -1...1 {
+                    for dx in -1...1 where !mask[(y + dy) * width + (x + dx)] {
+                        all = false
+                    }
+                }
+                eroded[index] = all
             }
         }
-        return Float(bestThreshold)
+        var dilated = eroded
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let index = y * width + x
+                guard !eroded[index] else { continue }
+                var any = false
+                for dy in -1...1 {
+                    for dx in -1...1 where eroded[(y + dy) * width + (x + dx)] {
+                        any = true
+                    }
+                }
+                dilated[index] = any
+            }
+        }
+        return dilated
+    }
+
+    private static func fitCircle(_ points: [SIMD2<Float>])
+        -> (center: SIMD2<Float>, radius: Float)? {
+        guard points.count >= 4 else { return nil }
+        var sx: Float = 0, sy: Float = 0
+        var sxx: Float = 0, syy: Float = 0, sxy: Float = 0
+        var sxz: Float = 0, syz: Float = 0, sz: Float = 0
+        for p in points {
+            let z = p.x * p.x + p.y * p.y
+            sx += p.x
+            sy += p.y
+            sxx += p.x * p.x
+            syy += p.y * p.y
+            sxy += p.x * p.y
+            sxz += p.x * z
+            syz += p.y * z
+            sz += z
+        }
+        let n = Float(points.count)
+        let m = [[2 * sxx, 2 * sxy, sx],
+                 [2 * sxy, 2 * syy, sy],
+                 [2 * sx, 2 * sy, n]]
+        let rhs: [Float] = [sxz, syz, sz]
+        let det = determinant(m)
+        guard abs(det) > 1e-6 else { return nil }
+        let a = determinant([[rhs[0], m[0][1], m[0][2]],
+                             [rhs[1], m[1][1], m[1][2]],
+                             [rhs[2], m[2][1], m[2][2]]]) / det
+        let b = determinant([[m[0][0], rhs[0], m[0][2]],
+                             [m[1][0], rhs[1], m[1][2]],
+                             [m[2][0], rhs[2], m[2][2]]]) / det
+        let c = determinant([[m[0][0], m[0][1], rhs[0]],
+                             [m[1][0], m[1][1], rhs[1]],
+                             [m[2][0], m[2][1], rhs[2]]]) / det
+        let value = c + a * a + b * b
+        guard value > 0, value.isFinite else { return nil }
+        return (SIMD2<Float>(a, b), value.squareRoot())
+    }
+
+    private static func determinant(_ m: [[Float]]) -> Float {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
 }

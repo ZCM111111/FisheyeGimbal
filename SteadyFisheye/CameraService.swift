@@ -78,7 +78,7 @@ final class CameraService: NSObject, ObservableObject,
 
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
-    private var pendingGrid: ((LensCircleMeasurer.LumaGrid?) -> Void)?
+    private var pendingGrid: ((FrameGrid?) -> Void)?
     private let gridLock = NSLock()
 
     // Saving one untouched frame, for checking detection and calibration
@@ -122,9 +122,9 @@ final class CameraService: NSObject, ObservableObject,
         }
     }
 
-    /// Asks for one frame, decimated to a luminance grid, for measuring where
-    /// the image circle sits. The handler runs off the main thread.
-    func requestLumaGrid(_ handler: @escaping (LensCircleMeasurer.LumaGrid?) -> Void) {
+    /// Asks for one frame, decimated to a luminance/chroma grid, for measuring
+    /// the lens circle or finding the cabinet. Runs off the main thread.
+    func requestFrameGrid(_ handler: @escaping (FrameGrid?) -> Void) {
         gridLock.lock()
         pendingGrid = handler
         gridLock.unlock()
@@ -625,7 +625,7 @@ final class CameraService: NSObject, ObservableObject,
         pendingGrid = nil
         gridLock.unlock()
         if let pending = pending {
-            let grid = LensCircleMeasurer.makeGrid(from: pixelBuffer)
+            let grid = FrameGrid.make(from: pixelBuffer)
             DispatchQueue.global(qos: .userInitiated).async {
                 pending(grid)
             }

@@ -11,27 +11,6 @@ import simd
 /// observation, so automating it is safe.
 enum LensCircleMeasurer {
 
-    struct LumaGrid {
-        let width: Int
-        let height: Int
-        let lum: [Float]
-        /// Pixel size of the frame this grid was decimated from, so a measured
-        /// point can be turned back into a source coordinate.
-        let sourceSize: CGSize
-
-        func sample(_ x: Float, _ y: Float) -> Float? {
-            guard x >= 0, y >= 0, x <= Float(width - 1), y <= Float(height - 1) else {
-                return nil
-            }
-            let x0 = Int(x), y0 = Int(y)
-            let x1 = min(x0 + 1, width - 1), y1 = min(y0 + 1, height - 1)
-            let fx = x - Float(x0), fy = y - Float(y0)
-            let top = lum[y0 * width + x0] + (lum[y0 * width + x1] - lum[y0 * width + x0]) * fx
-            let bottom = lum[y1 * width + x0] + (lum[y1 * width + x1] - lum[y1 * width + x0]) * fx
-            return top + (bottom - top) * fy
-        }
-    }
-
     struct Result {
         var found = false
         /// Offsets from the frame centre, normalised by the short side — the
@@ -44,52 +23,7 @@ enum LensCircleMeasurer {
         var summary = ""
     }
 
-    /// Decimated luminance copy of one frame.
-    static func makeGrid(from pixelBuffer: CVPixelBuffer, targetWidth: Int = 256) -> LumaGrid? {
-        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
-            return nil
-        }
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return nil }
-        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-        let sourceWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
-        let sourceHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
-        guard sourceWidth > 16, sourceHeight > 16, bytesPerRow > 0 else { return nil }
-
-        let planar = CVPixelBufferIsPlanar(pixelBuffer)
-        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
-        let isBGRA = !planar || pixelFormat == kCVPixelFormatType_32BGRA
-
-        let step = max(1, sourceWidth / max(targetWidth, 32))
-        let width = sourceWidth / step
-        let height = sourceHeight / step
-        guard width > 16, height > 16 else { return nil }
-
-        var lum = [Float](repeating: 0, count: width * height)
-        let bytes = base.assumingMemoryBound(to: UInt8.self)
-        for y in 0..<height {
-            let sourceRow = y * step
-            guard sourceRow < sourceHeight else { break }
-            let rowStart = sourceRow * bytesPerRow
-            for x in 0..<width {
-                let column = x * step
-                guard column < sourceWidth else { continue }
-                if isBGRA {
-                    lum[y * width + x] = Float(bytes[rowStart + column * 4 + 1])
-                } else {
-                    lum[y * width + x] = Float(bytes[rowStart + column])
-                }
-            }
-        }
-        return LumaGrid(width: width,
-                        height: height,
-                        lum: lum,
-                        sourceSize: CGSize(width: CGFloat(sourceWidth),
-                                           height: CGFloat(sourceHeight)))
-    }
-
-    static func measure(grid: LumaGrid) -> Result {
+    static func measure(grid: FrameGrid) -> Result {
         var result = Result()
         let width = Float(grid.width), height = Float(grid.height)
         let shortSide = Float(min(grid.width, grid.height))
