@@ -148,6 +148,9 @@ struct ContentView: View {
             // The preview is the product: the screen must not dim while the
             // user is framing a shot.
             UIApplication.shared.isIdleTimerDisabled = true
+            // Ask for the photo library now, so the first recording saves
+            // itself without a permission prompt in the middle.
+            recorder.preparePhotoAccess()
             // Audio from the capture pipeline goes straight into the recorder.
             // Hopped to the main thread because all recorder state lives there,
             // and appending from the audio queue would race with stop().
@@ -401,18 +404,18 @@ struct ContentView: View {
             Spacer(minLength: 0)
             if !recorder.isRecording, recorder.lastRecordingURL != nil {
                 Button { shareURL = recorder.lastRecordingURL } label: {
-                    Text("存入相册")
+                    Text("分享")
                         .font(Theme.label(11))
                         .tracking(0.3)
-                        .foregroundColor(Theme.accent)
+                        .foregroundColor(Theme.textSecondary)
                         .padding(.horizontal, 9)
                         .frame(height: 28)
-                        .background(Theme.accentDim,
+                        .background(Theme.surface2,
                                     in: RoundedRectangle(cornerRadius: Theme.rBase))
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
-                .accessibilityLabel("用系统分享把视频存入相册")
+                .accessibilityLabel("分享刚录制的视频")
             }
             recordButton
         }
