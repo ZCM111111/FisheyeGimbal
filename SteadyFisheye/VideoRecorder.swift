@@ -1,7 +1,6 @@
 import Foundation
 import AVFoundation
 import CoreVideo
-import Photos
 import Combine
 
 /// Records what the app actually shows: the undistorted, stabilised frame, with
@@ -17,6 +16,9 @@ final class VideoRecorder: ObservableObject {
     @Published private(set) var duration: TimeInterval = 0
     /// Last thing worth telling the user: saved, failed, permission missing.
     @Published private(set) var message: String?
+    /// The finished recording on disk, ready to be shared into the photo
+    /// library by the system share sheet.
+    @Published private(set) var lastRecordingURL: URL?
 
     private(set) var recordingSize = CGSize.zero
 
@@ -236,10 +238,9 @@ final class VideoRecorder: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if finishingWriter.status == .completed {
-                    // The file is moved somewhere permanent first, so a refused
-                    // or failing photo library can never lose the recording.
                     let kept = self.persist(url: url)
-                    self.saveToPhotos(url: kept)
+                    self.lastRecordingURL = kept
+                    self.message = "已保存到「文件」App → SteadyFisheye"
                 } else {
                     let reason = finishingWriter.error?.localizedDescription ?? "未知原因"
                     self.message = "录像保存失败：\(reason)"
@@ -265,55 +266,6 @@ final class VideoRecorder: ObservableObject {
             return url
         }
         return destination
-    }
-
-    /// Asks for photo-library access up front.
-    ///
-    /// Requesting it while a recording finishes means the permission dialog
-    /// appears at the worst possible moment, and a refused or unavailable
-    /// description there ends the app instead of the save.
-    func preparePhotoAccess() {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { _ in }
-    }
-
-    private func saveToPhotos(url: URL) {
-        let manager = FileManager.default
-        let attributes = try? manager.attributesOfItem(atPath: url.path)
-        let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
-        guard manager.fileExists(atPath: url.path), size > 0 else {
-            message = "录像文件为空，已丢弃"
-            try? manager.removeItem(at: url)
-            return
-        }
-
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard status == .authorized || status == .limited else {
-                    self.message = "相册权限未开启，视频在「文件」App → SteadyFisheye"
-                    return
-                }
-                PHPhotoLibrary.shared().performChanges {
-                    let options = PHAssetResourceCreationOptions()
-                    // Keep our own copy: the file is also the user's backup.
-                    options.shouldMoveFile = false
-                    PHAssetCreationRequest.forAsset().addResource(with: .video,
-                                                                 fileURL: url,
-                                                                 options: options)
-                } completionHandler: { success, error in
-                    DispatchQueue.main.async {
-                        // `self` is already unwrapped and held by the enclosing
-                        // closure, so it must not be bound again here.
-                        if success {
-                            self.message = "已保存到相册"
-                        } else {
-                            let reason = error?.localizedDescription ?? "未知错误"
-                            self.message = "相册保存失败（\(reason)），视频在「文件」App → SteadyFisheye"
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private func startClock() {

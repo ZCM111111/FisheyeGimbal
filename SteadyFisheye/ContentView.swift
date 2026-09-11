@@ -22,6 +22,8 @@ struct ContentView: View {
     @State private var ignoreNextTap = false
     @State private var renderer: MetalRenderer?
     @State private var toast: String?
+    /// Set while the share sheet is up, with the recording to hand over.
+    @State private var shareURL: URL?
     /// Held in a reference box: bumping a plain `@State` on every drag event
     /// invalidates the whole view, which is not something a slider should do.
     @State private var tokens = CancellationTokens()
@@ -146,9 +148,6 @@ struct ContentView: View {
             // The preview is the product: the screen must not dim while the
             // user is framing a shot.
             UIApplication.shared.isIdleTimerDisabled = true
-            // Ask for the photo library now rather than at the end of the first
-            // recording, where the prompt would interrupt the save.
-            recorder.preparePhotoAccess()
             // Audio from the capture pipeline goes straight into the recorder.
             // Hopped to the main thread because all recorder state lives there,
             // and appending from the audio queue would race with stop().
@@ -175,6 +174,12 @@ struct ContentView: View {
                     .onChange(of: geo.size) { containerSize = $0 }
             }
         )
+        .sheet(isPresented: Binding(get: { shareURL != nil },
+                                    set: { if !$0 { shareURL = nil } })) {
+            if let url = shareURL {
+                ActivityView(items: [url])
+            }
+        }
     }
 
     /// Tiny box so token bumps do not invalidate the view.
@@ -394,6 +399,21 @@ struct ContentView: View {
             }
             metric("帧率", "\(camera.measuredFPS) 帧")
             Spacer(minLength: 0)
+            if !recorder.isRecording, recorder.lastRecordingURL != nil {
+                Button { shareURL = recorder.lastRecordingURL } label: {
+                    Text("存入相册")
+                        .font(Theme.label(11))
+                        .tracking(0.3)
+                        .foregroundColor(Theme.accent)
+                        .padding(.horizontal, 9)
+                        .frame(height: 28)
+                        .background(Theme.accentDim,
+                                    in: RoundedRectangle(cornerRadius: Theme.rBase))
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .accessibilityLabel("用系统分享把视频存入相册")
+            }
             recordButton
         }
         .lineLimit(1)
