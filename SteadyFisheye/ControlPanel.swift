@@ -126,6 +126,13 @@ struct ControlPanel: View {
                 Segmented(values: FisheyeProjection.allCases,
                           titles: FisheyeProjection.allCases.map { $0.title },
                           selection: $settings.projection)
+
+                // Portrait screens are much taller than wide, so the display
+                // mapping decides whether the fisheye circle is cropped to
+                // fill the screen or fitted inside it.
+                Segmented(values: [true, false],
+                          titles: ["fill screen", "fit view"],
+                          selection: $settings.fillScreen)
             }
         }
     }

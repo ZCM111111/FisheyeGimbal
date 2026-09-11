@@ -207,11 +207,9 @@ private struct MetalPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        let scale = uiView.window?.screen.scale ?? UIScreen.main.scale
-        let size = uiView.bounds.size
-        if size.width > 0, size.height > 0 {
-            uiView.drawableSize = CGSize(width: size.width * scale, height: size.height * scale)
-        }
+        // Drawable sizing is left to MTKView's auto-resize. Assigning
+        // drawableSize by hand during layout could install a stale drawable,
+        // which showed up as the image sitting in a black box mid-screen.
     }
 
     static func dismantleUIView(_ uiView: MTKView, coordinator: Coordinator) {

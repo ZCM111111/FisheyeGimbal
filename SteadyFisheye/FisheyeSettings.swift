@@ -40,6 +40,12 @@ final class FisheyeSettings: ObservableObject {
     @Published var centerY: Float = 0
     @Published var edgeFeather: Float = 0.025
 
+    /// Display mapping. `true` derives the projection focal from the long edge
+    /// so the corrected image crops to fill the whole screen (portrait phone
+    /// screens are much taller than wide). `false` derives it from the short
+    /// edge, which fits the widest view but leaves black bars above/below.
+    @Published var fillScreen: Bool = true
+
     // Image finishing controls. These are deliberately conservative because
     // sharpening cannot recover detail lost to a soft sensor or dirty glass.
     @Published var sharpness: Float = 0.18
@@ -56,6 +62,7 @@ final class FisheyeSettings: ObservableObject {
         centerX = 0
         centerY = 0
         edgeFeather = 0.025
+        fillScreen = true
         sharpness = 0.18
         localContrast = 0.10
         hazeCompensation = 0.05

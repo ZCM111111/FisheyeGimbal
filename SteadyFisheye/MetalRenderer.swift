@@ -279,7 +279,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             distortion: SIMD4<Float>(parameters.k1, parameters.k2,
                                      Float(frame.format), parameters.sharpness),
             finishing: SIMD4<Float>(parameters.localContrast,
-                                   parameters.hazeCompensation, 0, 0)
+                                   parameters.hazeCompensation,
+                                   settings.fillScreen ? 1 : 0, 0)
         )
     }
 

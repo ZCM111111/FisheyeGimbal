@@ -208,31 +208,38 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         }
     }
 
-    /// Select the closest practical 60 FPS format. 1080p is preferred over
-    /// 4K because the fisheye remap is performed for every output pixel.
+    /// Select a practical 60 FPS format.
+    ///
+    /// Scoring by "distance from 4K" alone was wrong: on lenses whose 60 FPS
+    /// formats top out at 1080p, it could prefer an odd 4:3 format over a
+    /// proper 16:9 one. Prefer 60 FPS + 16:9 + at least 720p, then take the
+    /// largest available; fall back to any 60 FPS format above 720p.
     private func best60FPSFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
-        let candidates = device.formats.filter { format in
+        let sixtyFPS = device.formats.filter { format in
             let supports60 = format.videoSupportedFrameRateRanges.contains {
                 $0.minFrameRate <= 60 && $0.maxFrameRate >= 60
             }
-            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-            return supports60 && dimensions.width >= 1280 && dimensions.height >= 720
+            guard supports60 else { return false }
+            let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return d.width >= 1280 && d.height >= 720
         }
-        return candidates.min { lhs, rhs in
-            func score(_ format: AVCaptureDevice.Format) -> Double {
-                let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                let pixels = Double(d.width) * Double(d.height)
-                let aspect = Double(d.width) / max(Double(d.height), 1)
-                let aspectPenalty = abs(aspect - (16.0 / 9.0)) * 250_000
-                let targetPixels = selectedLens == .ultraWide
-                    ? 3840.0 * 2160.0
-                    : 1920.0 * 1080.0
-                // iPhone 15 Pro Max can feed the 0.5x lens at 4K60;
-                // use that extra source detail before GPU remapping.
-                return abs(pixels - targetPixels) + aspectPenalty
-            }
-            return score(lhs) < score(rhs)
+
+        func isWide16x9(_ format: AVCaptureDevice.Format) -> Bool {
+            let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let aspect = Double(d.width) / max(Double(d.height), 1)
+            return abs(aspect - (16.0 / 9.0)) < 0.05
         }
+
+        func area(_ format: AVCaptureDevice.Format) -> Double {
+            let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return Double(d.width) * Double(d.height)
+        }
+
+        let wide = sixtyFPS.filter(isWide16x9)
+        if let best = wide.max(by: { area($0) < area($1) }) {
+            return best
+        }
+        return sixtyFPS.max(by: { area($0) < area($1) })
     }
 
     private func removeConfiguration() {

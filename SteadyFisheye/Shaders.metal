@@ -90,10 +90,18 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     uint sourceFormat = uint(max(u.distortion.z, 0.0));
     float localContrast = clamp(u.finishing.x, 0.0, 1.0);
     float hazeCompensation = clamp(u.finishing.y, 0.0, 1.0);
+    // 1 = crop to fill the screen (focal from the long edge)
+    // 0 = fit the widest view (focal from the short edge)
+    float fillScreen = clamp(u.finishing.z, 0.0, 1.0);
 
     // The output is a pinhole camera in locked-camera coordinates.
+    // A portrait phone screen is far taller than wide, so deriving the focal
+    // from the width would demand a vertical field of view beyond what the
+    // fisheye glass actually covers, leaving the image circle floating in a
+    // black field. Filling from the long edge crops horizontally instead.
     float2 pixel = in.uv * viewSize;
-    float focalOut = (viewSize.x * 0.5) / max(tan(outputFov * 0.5), 0.001);
+    float reference = mix(viewSize.x, viewSize.y, fillScreen);
+    float focalOut = (reference * 0.5) / max(tan(outputFov * 0.5), 0.001);
     float2 xy = (pixel - viewSize * 0.5) / focalOut;
     float3 rayLocked = normalize(float3(xy.x, xy.y, 1.0));
 
