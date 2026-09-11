@@ -98,7 +98,7 @@ final class CameraService: NSObject, ObservableObject,
 
     private func saveRawFrame(_ pixelBuffer: CVPixelBuffer) {
         let image = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let data = ciContext.jpegDataRepresentation(
+        guard let data = ciContext.jpegRepresentation(
                 of: image,
                 colorSpace: CGColorSpaceCreateDeviceRGB()) else {
             DispatchQueue.main.async { [weak self] in
