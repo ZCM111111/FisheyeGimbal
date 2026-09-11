@@ -94,29 +94,50 @@ def detect_small(image):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    sources = []
+    out = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--out" and i + 1 < len(args):
+            out = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--out="):
+            out = a.split("=", 1)[1]
+            i += 1
+            continue
+        sources.append(a)
+        i += 1
+
+    if not sources:
         print(__doc__)
         sys.exit(1)
-    folders = [a for a in sys.argv[1:] if not a.startswith("--")]
-    args = [a for a in sys.argv[1:] if a.startswith("--")]
-    source = folders[0]
-    out = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-    for i, a in enumerate(args):
-        if a == "--out" and i + 1 < len(folders):
-            out = folders[i + 1]
-        elif a.startswith("--out="):
-            out = a.split("=", 1)[1]
+    if out is None:
+        out = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+
     out = os.path.join(out, "fisheye_dataset")
     images_dir = os.path.join(out, "images")
     labels_dir = os.path.join(out, "labels")
     os.makedirs(images_dir, exist_ok=True)
     os.makedirs(labels_dir, exist_ok=True)
 
-    files = sorted(f for f in os.listdir(source)
-                   if f.lower().endswith((".png", ".jpg", ".jpeg")))
+    # Full paths, so several folders can be labelled in one session.
+    files = []
+    for source in sources:
+        if not os.path.isdir(source):
+            print("skip (not a folder):", source)
+            continue
+        for name in sorted(os.listdir(source)):
+            if name.lower().endswith((".png", ".jpg", ".jpeg")):
+                files.append(os.path.join(source, name))
     if not files:
-        print("no images in", source)
+        print("no images in", sources)
         sys.exit(1)
+    print(f"{len(files)} 张待标注，输出到 {out}")
+    print("空格=接受绿框  拖动=重画  r=重检测  n=跳过  u=退回  q=保存退出")
+    print()
 
     state = State()
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
@@ -128,8 +149,9 @@ def main():
     skipped = 0
 
     while 0 <= index < len(files):
-        name = files[index]
-        image = cabinet_detect.imread_unicode(os.path.join(source, name))
+        path = files[index]
+        name = os.path.basename(path)
+        image = cabinet_detect.imread_unicode(path)
         if image is None:
             index += 1
             continue
@@ -167,14 +189,15 @@ def main():
 
             if key in (13, 32):                     # enter / space
                 if state.box and abs(state.box[2] - state.box[0]) > 8:
-                    shutil.copyfile(os.path.join(source, name),
-                                    os.path.join(images_dir, name))
+                    # Numbered, so two folders with the same file name cannot
+                    # collide in the dataset.
+                    stem = "%04d_%s" % (index, os.path.splitext(name)[0])
+                    shutil.copyfile(path, os.path.join(images_dir, stem + ".jpg"))
                     label = normalise(state.box, w, h)
-                    with open(os.path.join(labels_dir,
-                                           os.path.splitext(name)[0] + ".txt"), "w") as handle:
+                    with open(os.path.join(labels_dir, stem + ".txt"), "w") as handle:
                         handle.write("0 %.6f %.6f %.6f %.6f\n" % label)
                     saved += 1
-                    history.append(name)
+                    history.append((path, index))
                     action = "next"
                 else:
                     print("  box too small — drag one first")
@@ -196,17 +219,15 @@ def main():
             break
         if action == "back":
             if history:
-                previous = history.pop()
-                for folder in (images_dir, labels_dir):
-                    candidate = os.path.join(folder, previous)
-                    if os.path.exists(candidate):
-                        os.remove(candidate)
-                    stem = os.path.splitext(previous)[0]
-                    candidate = os.path.join(folder, stem + ".txt")
+                previous_path, previous_index = history.pop()
+                stem = "%04d_%s" % (previous_index,
+                                    os.path.splitext(os.path.basename(previous_path))[0])
+                for folder, suffix in ((images_dir, ".jpg"), (labels_dir, ".txt")):
+                    candidate = os.path.join(folder, stem + suffix)
                     if os.path.exists(candidate):
                         os.remove(candidate)
                 saved = max(saved - 1, 0)
-                index = files.index(previous)
+                index = previous_index
                 continue
             index = max(index - 1, 0)
             continue
