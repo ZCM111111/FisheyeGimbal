@@ -122,7 +122,7 @@ final class CameraService: NSObject, ObservableObject,
         }
     }
 
-    /// Asks for one frame, decimated to a luminance/chroma grid, for measuring
+    /// Asks for one frame, decimated to a luminance grid, for measuring
     /// the lens circle or finding the cabinet. Runs off the main thread.
     func requestFrameGrid(_ handler: @escaping (FrameGrid?) -> Void) {
         gridLock.lock()

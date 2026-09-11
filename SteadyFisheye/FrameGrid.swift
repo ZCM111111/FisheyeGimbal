@@ -2,18 +2,16 @@ import Foundation
 import CoreVideo
 import simd
 
-/// A decimated copy of one camera frame: luminance plus chroma.
+/// A decimated copy of one camera frame.
 ///
 /// Both detectors work on this so they never touch the 4K buffer directly, and
-/// so they see exactly the same data. Chroma is carried as Cb/Cr rather than RGB
-/// because that is what the capture pipeline already delivers, and the violet
-/// test the button detector needs is a two-channel comparison there.
+/// so they see exactly the same data. Only luminance is kept: the cabinet is
+/// found from edges, and the buttons' colour changes with the song, so chroma
+/// would be misleading rather than useful.
 struct FrameGrid {
     let width: Int
     let height: Int
     let lum: [Float]
-    let cb: [Float]
-    let cr: [Float]
     /// Pixel size of the frame this was decimated from.
     let sourceSize: CGSize
 
@@ -27,20 +25,6 @@ struct FrameGrid {
         let top = lum[y0 * width + x0] + (lum[y0 * width + x1] - lum[y0 * width + x0]) * fx
         let bottom = lum[y1 * width + x0] + (lum[y1 * width + x1] - lum[y1 * width + x0]) * fx
         return top + (bottom - top) * fy
-    }
-
-    /// How far towards violet a pixel is: both chroma channels have to be above
-    /// neutral, which is what "violet" means in Cb/Cr terms.
-    func violetness(_ x: Int, _ y: Int) -> Float {
-        let index = y * width + x
-        guard index >= 0, index < lum.count else { return -255 }
-        return min(cb[index] - 128, cr[index] - 128)
-    }
-
-    func luma(_ x: Int, _ y: Int) -> Float {
-        let index = y * width + x
-        guard index >= 0, index < lum.count else { return 0 }
-        return lum[index]
     }
 }
 
@@ -64,21 +48,13 @@ extension FrameGrid {
         let isBGRA = !planar || CVPixelBufferGetPixelFormatType(pixelBuffer)
             == kCVPixelFormatType_32BGRA
 
-        // Biplanar chroma is half resolution in both directions, interleaved Cb
-        // then Cr.
-        let chromaBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1)
-        let chromaStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
-
         let step = max(1, sourceWidth / max(targetWidth, 32))
         let width = sourceWidth / step
         let height = sourceHeight / step
         guard width > 16, height > 16 else { return nil }
 
         var lum = [Float](repeating: 0, count: width * height)
-        var cb = [Float](repeating: 128, count: width * height)
-        var cr = [Float](repeating: 128, count: width * height)
         let bytes = lumaBase.assumingMemoryBound(to: UInt8.self)
-        let chromaBytes = chromaBase?.assumingMemoryBound(to: UInt8.self)
 
         for y in 0..<height {
             let sourceRow = y * step
@@ -88,23 +64,11 @@ extension FrameGrid {
                 let column = x * step
                 guard column < sourceWidth else { continue }
                 let index = y * width + x
-
                 if isBGRA {
-                    let offset = rowStart + column * 4
-                    let blue = Float(bytes[offset])
-                    let green = Float(bytes[offset + 1])
-                    let red = Float(bytes[offset + 2])
-                    lum[index] = 0.299 * red + 0.587 * green + 0.114 * blue
-                    cb[index] = 128 - 0.1687 * red - 0.3313 * green + 0.5 * blue
-                    cr[index] = 128 + 0.5 * red - 0.4187 * green - 0.0813 * blue
+                    // Green channel is a good enough luma proxy for edge work.
+                    lum[index] = Float(bytes[rowStart + column * 4 + 1])
                 } else {
                     lum[index] = Float(bytes[rowStart + column])
-                    if let chromaBytes = chromaBytes, chromaStride > 0 {
-                        let chromaRow = (sourceRow / 2) * chromaStride
-                        let chromaColumn = (column / 2) * 2
-                        cb[index] = Float(chromaBytes[chromaRow + chromaColumn])
-                        cr[index] = Float(chromaBytes[chromaRow + chromaColumn + 1])
-                    }
                 }
             }
         }
@@ -112,8 +76,6 @@ extension FrameGrid {
         return FrameGrid(width: width,
                          height: height,
                          lum: lum,
-                         cb: cb,
-                         cr: cr,
                          sourceSize: CGSize(width: CGFloat(sourceWidth),
                                             height: CGFloat(sourceHeight)))
     }

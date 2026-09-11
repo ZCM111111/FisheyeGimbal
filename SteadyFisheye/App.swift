@@ -84,12 +84,11 @@ final class CameraApp: ObservableObject {
             // Only the detection runs off the main thread: it is pure CPU work
             // over a local grid, with no shared state.
             //
-            // The first pass is deliberately lenient about the ring's
-            // roundness: it runs on the raw fisheye frame, where a ring away
-            // from the centre is stretched out of shape. Once centred, the
-            // second pass sees a true circle and can be strict.
-            let limit: Float = remaining > 1 ? 0.45 : 0.28
-            let result = grid.map { CabinetDetector.detect(grid: $0, spreadLimit: limit) }
+            // The first pass is deliberately lenient: it runs on the raw fisheye
+            // frame, where the screen's circle is bent by the wide lens. Once
+            // centred, the second pass sees a true circle and can be strict.
+            let limit: Float = remaining > 1 ? 0.45 : 0.55
+            let result = grid.map { CabinetDetector.detect(grid: $0, supportLimit: limit) }
             let sourceSize = grid?.sourceSize
             DispatchQueue.main.async {
                 guard let self else { return }

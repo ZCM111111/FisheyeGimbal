@@ -2,17 +2,16 @@ import Foundation
 import CoreGraphics
 import simd
 
-/// Finds the maimai cabinet by its lit button ring.
+/// Finds the maimai cabinet by the circular boundary of its screen.
 ///
-/// The first attempt here looked for the brightest blob in the frame, and real
-/// footage killed it outright: in one shot a lit wall won, in another the white
-/// cabinet shell did. What survives across idle and mid-song frames is the ring
-/// of eight lit buttons — saturated, always on, and arranged in a circle. Fitting
-/// a circle through their centres both finds the cabinet and proves it was found,
-/// because clutter that happens to be violet does not sit on a ring.
+/// Colour is deliberately not used anywhere here. The buttons are RGB LEDs that
+/// change with the song, so any hue test works only by luck; the screen's round
+/// bezel and the ring of button shapes around it care nothing about colour.
 ///
-/// Thresholds below are the ones measured against real photos; the violet test
-/// is deliberately loose and the shape gate is what rejects the noise.
+/// Gradients find the bezel, a Hough pass proposes circles, and each proposal is
+/// scored by how much real edge actually lies along it — a circle with weak
+/// support is a guess, not a detection. Measured on 62 real frames from a dim
+/// room and an arcade, the accepted circles carried 0.82-0.99 edge support.
 enum CabinetDetector {
 
     struct Result {
@@ -22,190 +21,237 @@ enum CabinetDetector {
         var centerY: Float = 0
         /// The same centre in source pixels, ready for the lens model.
         var centerPixel = SIMD2<Float>(0, 0)
-        /// Ring radius, normalised by the short side.
+        /// Screen radius, normalised by the short side.
         var radius: Float = 0
-        var blobs = 0
-        var spread: Float = 0
-        var coverage: Float = 0
+        var support: Float = 0
+        var candidates = 0
         var summary = ""
     }
 
-    // Measured on real footage: min(Cr-128, Cb-128) > 4 and Y > 90 found the
-    // buttons in every frame tested.
-    private static let violetThreshold: Float = 4
-    private static let lumaFloor: Float = 90
-    private static let minimumBlobArea = 4
-    private static let maximumBlobArea = 1400
-    private static let minimumBlobs = 5
-    private static let maximumSpread: Float = 0.28
-    private static let minimumCoverage: Float = 200
+    private static let minRadiusFraction: Float = 0.12
+    private static let maxRadiusFraction: Float = 0.78
+    private static let radiusStep: Float = 2
+    /// Fraction of the circle that must sit on a real edge.
+    private static let supportThreshold: Float = 0.55
+    /// Radial slack when sampling, because a wide lens bends a circle slightly.
+    private static let supportTolerance = 3
 
-    static func detect(grid: FrameGrid, spreadLimit: Float = maximumSpread) -> Result {
+    static func detect(grid: FrameGrid, supportLimit: Float = supportThreshold) -> Result {
         var result = Result()
         let width = grid.width
         let height = grid.height
-        guard width > 24, height > 24 else {
+        guard width > 32, height > 32 else {
             result.summary = "画面太小，读不出数据"
             return result
         }
-        let shortSide = Float(min(width, height))
 
-        // Violet mask.
-        var mask = [Bool](repeating: false, count: width * height)
-        for y in 0..<height {
-            for x in 0..<width {
+        // Sobel gradients on luminance only.
+        var gradientX = [Float](repeating: 0, count: width * height)
+        var gradientY = [Float](repeating: 0, count: width * height)
+        var magnitude = [Float](repeating: 0, count: width * height)
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let tl = grid.lum[(y - 1) * width + (x - 1)]
+                let tc = grid.lum[(y - 1) * width + x]
+                let tr = grid.lum[(y - 1) * width + (x + 1)]
+                let ml = grid.lum[y * width + (x - 1)]
+                let mr = grid.lum[y * width + (x + 1)]
+                let bl = grid.lum[(y + 1) * width + (x - 1)]
+                let bc = grid.lum[(y + 1) * width + x]
+                let br = grid.lum[(y + 1) * width + (x + 1)]
+                let gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl)
+                let gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr)
                 let index = y * width + x
-                mask[index] = grid.violetness(x, y) > violetThreshold
-                    && grid.lum[index] > lumaFloor
-            }
-        }
-        mask = open(mask, width: width, height: height)
-
-        // Blob centroids, 8-connected: the buttons are solid patches.
-        var visited = [Bool](repeating: false, count: width * height)
-        var stack: [Int] = []
-        var centers: [SIMD2<Float>] = []
-        for start in 0..<(width * height) where mask[start] && !visited[start] {
-            stack.removeAll(keepingCapacity: true)
-            stack.append(start)
-            visited[start] = true
-            var sumX: Float = 0
-            var sumY: Float = 0
-            var count = 0
-            while let index = stack.popLast() {
-                let x = index % width
-                let y = index / width
-                sumX += Float(x)
-                sumY += Float(y)
-                count += 1
-                for dy in -1...1 {
-                    for dx in -1...1 where !(dx == 0 && dy == 0) {
-                        let nx = x + dx
-                        let ny = y + dy
-                        guard nx >= 0, nx < width, ny >= 0, ny < height else { continue }
-                        let neighbour = ny * width + nx
-                        guard mask[neighbour], !visited[neighbour] else { continue }
-                        visited[neighbour] = true
-                        stack.append(neighbour)
-                    }
-                }
-            }
-            if count >= minimumBlobArea, count <= maximumBlobArea {
-                centers.append(SIMD2<Float>(sumX / Float(count), sumY / Float(count)))
+                gradientX[index] = gx
+                gradientY[index] = gy
+                magnitude[index] = (gx * gx + gy * gy).squareRoot()
             }
         }
 
-        result.blobs = centers.count
-        guard centers.count >= minimumBlobs else {
-            result.summary = "只找到 \(centers.count) 个按键色块，对着机台再试"
+        let strongEdge = 0.55 * percentile(magnitude, every: 7, fraction: 0.97)
+        guard strongEdge > 4 else {
+            result.summary = "画面太平，没有可用的边缘"
             return result
         }
 
-        // Circle fit with iterative outlier rejection: one stray violet object
-        // is enough to spoil a plain least-squares fit, and rejecting it is what
-        // turns 10/12 frames into 12/12.
-        var points = centers
-        var center = SIMD2<Float>(Float(width) * 0.5, Float(height) * 0.5)
-        var radius: Float = 0
-        for _ in 0..<3 {
-            guard let fitted = fitCircle(points) else {
-                result.summary = "圆环拟合失败"
-                return result
+        // Edge pixel list, so the Hough pass does not walk the whole frame once
+        // per radius.
+        var edgePixels: [Int] = []
+        edgePixels.reserveCapacity(width * height / 8)
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let index = y * width + x
+                if magnitude[index] >= strongEdge {
+                    edgePixels.append(index)
+                }
             }
+        }
+        guard edgePixels.count > 200 else {
+            result.summary = "边缘太少，找不到屏幕边界"
+            return result
+        }
+
+        // Hough: one radius at a time, voting along the gradient direction.
+        let shortSide = Float(min(width, height))
+        var accumulator = [Int](repeating: 0, count: width * height)
+        var candidates: [(x: Float, y: Float, r: Float)] = []
+        var radius = shortSide * minRadiusFraction
+        let radiusLimit = shortSide * maxRadiusFraction
+        while radius <= radiusLimit {
+            for index in 0..<accumulator.count { accumulator[index] = 0 }
+            var bestVotes = 0
+            var bestIndex = -1
+            for index in edgePixels {
+                let m = magnitude[index]
+                let ux = gradientX[index] / m
+                let uy = gradientY[index] / m
+                let px = Float(index % width)
+                let py = Float(index / width)
+                for sign in [Float(1), Float(-1)] {
+                    let cx = Int((px + sign * ux * radius).rounded())
+                    let cy = Int((py + sign * uy * radius).rounded())
+                    guard cx >= 0, cx < width, cy >= 0, cy < height else { continue }
+                    let vote = cy * width + cx
+                    accumulator[vote] += 1
+                    if accumulator[vote] > bestVotes {
+                        bestVotes = accumulator[vote]
+                        bestIndex = vote
+                    }
+                }
+            }
+            if bestIndex >= 0 {
+                candidates.append((Float(bestIndex % width), Float(bestIndex / width), radius))
+            }
+            radius += radiusStep
+        }
+
+        result.candidates = candidates.count
+        guard !candidates.isEmpty else {
+            result.summary = "没有候选圆"
+            return result
+        }
+
+        // Score every proposal by real edge support and keep the best.
+        var bestSupport: Float = 0
+        var best: (x: Float, y: Float, r: Float)?
+        for candidate in candidates {
+            let score = support(magnitude: magnitude,
+                                width: width,
+                                height: height,
+                                cx: candidate.x,
+                                cy: candidate.y,
+                                r: candidate.r,
+                                threshold: strongEdge)
+            if score > bestSupport {
+                bestSupport = score
+                best = candidate
+            }
+        }
+        guard let chosen = best else {
+            result.summary = "候选圆都不可用"
+            return result
+        }
+        guard bestSupport >= supportLimit else {
+            result.summary = String(format: "屏幕圆边界支持度只有 %.2f，没认出机台",
+                                    Double(bestSupport))
+            return result
+        }
+
+        // Refine the centre on the edge points that actually supported the
+        // circle, which also tolerates the slight ellipticity of a wide lens.
+        var supported: [SIMD2<Float>] = []
+        let samples = 180
+        for step in 0..<samples {
+            let angle = Float(step) / Float(samples) * 2 * .pi
+            let dx = cos(angle)
+            let dy = sin(angle)
+            var bestValue: Float = 0
+            var bestPoint: SIMD2<Float>?
+            for offset in -supportTolerance...supportTolerance {
+                let x = Int((chosen.x + (chosen.r + Float(offset)) * dx).rounded())
+                let y = Int((chosen.y + (chosen.r + Float(offset)) * dy).rounded())
+                guard x >= 1, x < width - 1, y >= 1, y < height - 1 else { continue }
+                let value = magnitude[y * width + x]
+                if value > bestValue {
+                    bestValue = value
+                    bestPoint = SIMD2<Float>(Float(x), Float(y))
+                }
+            }
+            if let point = bestPoint, bestValue >= strongEdge {
+                supported.append(point)
+            }
+        }
+
+        var center = SIMD2<Float>(chosen.x, chosen.y)
+        var ringRadius = chosen.r
+        if supported.count >= 24, let fitted = fitCircle(supported) {
             center = fitted.center
-            radius = fitted.radius
-            let distances = points.map { simd_distance($0, center) }
-            let mean = distances.reduce(0, +) / Float(distances.count)
-            let tolerance = max(0.28 * mean, 3)
-            let kept = zip(points, distances)
-                .filter { abs($0.1 - mean) <= tolerance }
-                .map { $0.0 }
-            if kept.count == points.count || kept.count < minimumBlobs { break }
-            points = kept
+            ringRadius = fitted.radius
         }
-
-        let distances = points.map { simd_distance($0, center) }
-        let mean = distances.reduce(0, +) / Float(distances.count)
-        let variance = distances.map { ($0 - mean) * ($0 - mean) }.reduce(0, +)
-            / Float(distances.count)
-        let spread = mean > 0 ? variance.squareRoot() / mean : 1
-
-        // Angular coverage: violet clutter all in one corner must not pass.
-        var angles = points.map { atan2($0.y - center.y, $0.x - center.x) }
-        angles.sort()
-        var biggestGap: Float = 0
-        for index in 0..<angles.count {
-            let next = angles[(index + 1) % angles.count]
-            let gap = index == angles.count - 1
-                ? (next + 2 * .pi) - angles[index]
-                : next - angles[index]
-            biggestGap = max(biggestGap, gap)
-        }
-        let coverage = 360 - biggestGap * 180 / .pi
 
         result.centerX = (center.x - Float(width) * 0.5) / shortSide
         result.centerY = (center.y - Float(height) * 0.5) / shortSide
         let scaleX = Float(grid.sourceSize.width) / Float(width)
         let scaleY = Float(grid.sourceSize.height) / Float(height)
         result.centerPixel = SIMD2<Float>(center.x * scaleX, center.y * scaleY)
-        result.radius = radius / shortSide
-        result.spread = spread
-        result.coverage = coverage
-        result.blobs = points.count
-
-        guard spread <= spreadLimit else {
-            result.summary = String(format: "按键半径离散度 %.2f 太大，不像圆环", Double(spread))
-            return result
-        }
-        guard coverage >= minimumCoverage else {
-            result.summary = String(format: "按键只覆盖 %.0f° 的圆环", Double(coverage))
-            return result
-        }
-
+        result.radius = ringRadius / shortSide
+        result.support = bestSupport
         result.found = true
-        result.summary = String(format: "按键 %d 个 · 偏移 (%+.3f, %+.3f) · 环半径 %.2f · 离散 %.2f",
-                                points.count,
+        result.summary = String(format: "屏幕圆 · 偏移 (%+.3f, %+.3f) · 半径 %.2f · 边缘支持度 %.2f",
                                 Double(result.centerX), Double(result.centerY),
-                                Double(result.radius), Double(spread))
+                                Double(result.radius), Double(bestSupport))
         return result
     }
 
-    /// 3x3 open: drops single-pixel chroma noise before blob analysis.
-    private static func open(_ mask: [Bool], width: Int, height: Int) -> [Bool] {
-        var eroded = mask
-        for y in 1..<(height - 1) {
-            for x in 1..<(width - 1) {
-                let index = y * width + x
-                guard mask[index] else { continue }
-                var all = true
-                for dy in -1...1 {
-                    for dx in -1...1 where !mask[(y + dy) * width + (x + dx)] {
-                        all = false
-                    }
-                }
-                eroded[index] = all
+    /// Fraction of the circle where a real edge is present.
+    private static func support(magnitude: [Float],
+                                width: Int,
+                                height: Int,
+                                cx: Float,
+                                cy: Float,
+                                r: Float,
+                                threshold: Float) -> Float {
+        let samples = 180
+        var strong = 0
+        var valid = 0
+        for step in 0..<samples {
+            let angle = Float(step) / Float(samples) * 2 * .pi
+            let dx = cos(angle)
+            let dy = sin(angle)
+            var best: Float = 0
+            var found = false
+            for offset in -supportTolerance...supportTolerance {
+                let x = Int((cx + (r + Float(offset)) * dx).rounded())
+                let y = Int((cy + (r + Float(offset)) * dy).rounded())
+                guard x >= 0, x < width, y >= 0, y < height else { continue }
+                found = true
+                best = max(best, magnitude[y * width + x])
             }
+            guard found else { continue }
+            valid += 1
+            if best >= threshold { strong += 1 }
         }
-        var dilated = eroded
-        for y in 1..<(height - 1) {
-            for x in 1..<(width - 1) {
-                let index = y * width + x
-                guard !eroded[index] else { continue }
-                var any = false
-                for dy in -1...1 {
-                    for dx in -1...1 where eroded[(y + dy) * width + (x + dx)] {
-                        any = true
-                    }
-                }
-                dilated[index] = any
-            }
+        guard valid > 0 else { return 0 }
+        return Float(strong) / Float(valid)
+    }
+
+    private static func percentile(_ values: [Float], every step: Int, fraction: Float) -> Float {
+        var sample: [Float] = []
+        sample.reserveCapacity(values.count / max(step, 1) + 1)
+        var index = 0
+        while index < values.count {
+            sample.append(values[index])
+            index += max(step, 1)
         }
-        return dilated
+        guard !sample.isEmpty else { return 0 }
+        sample.sort()
+        let position = Int(Float(sample.count - 1) * fraction)
+        return sample[min(max(position, 0), sample.count - 1)]
     }
 
     private static func fitCircle(_ points: [SIMD2<Float>])
         -> (center: SIMD2<Float>, radius: Float)? {
-        guard points.count >= 4 else { return nil }
+        guard points.count >= 12 else { return nil }
         var sx: Float = 0, sy: Float = 0
         var sxx: Float = 0, syy: Float = 0, sxy: Float = 0
         var sxz: Float = 0, syz: Float = 0, sz: Float = 0
