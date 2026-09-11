@@ -26,7 +26,6 @@ final class VideoRecorder: ObservableObject {
     private var videoInput: AVAssetWriterInput?
     private var videoAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var audioInput: AVAssetWriterInput?
-    private var pixelPool: CVPixelBufferPool?
     private var fileURL: URL?
     private var sessionStart: CMTime?
     private var lastVideoTime = CMTime.invalid
@@ -82,6 +81,24 @@ final class VideoRecorder: ObservableObject {
         }
         writer.add(input)
 
+        // The adaptor has to be built here — right after the input joins the
+        // writer and before writing starts — and with almost no pixel buffer
+        // attributes of our own.
+        //
+        // Building it later, or asking for explicit dimensions and a Metal
+        // compatibility flag, made its initialiser raise an Objective-C
+        // exception, which is fatal and killed the app the instant recording
+        // was tapped. Only the pixel format and IOSurface backing are requested;
+        // everything else is left to the adaptor's own pool, which is by
+        // definition compatible with the encoder.
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()
+        ]
+        videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: attributes)
+
         // Audio is optional: when the microphone was unavailable or refused,
         // recording still proceeds silently rather than failing.
         var audio: AVAssetWriterInput?
@@ -94,26 +111,6 @@ final class VideoRecorder: ObservableObject {
             }
         }
 
-        let attributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: width,
-            kCVPixelBufferHeightKey as String: height,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
-            kCVPixelBufferMetalCompatibilityKey as String: true
-        ]
-        var pool: CVPixelBufferPool?
-        let poolAttributes: [String: Any] = [
-            kCVPixelBufferPoolMinimumBufferCountKey as String: 6
-        ]
-        guard CVPixelBufferPoolCreate(kCFAllocatorDefault,
-                                      poolAttributes as CFDictionary,
-                                      attributes as CFDictionary,
-                                      &pool) == kCVReturnSuccess,
-              let createdPool = pool else {
-            message = "无法创建录像缓冲区"
-            return false
-        }
-
         guard writer.startWriting() else {
             message = "录像启动失败：\(writer.error?.localizedDescription ?? "未知原因")"
             return false
@@ -123,13 +120,9 @@ final class VideoRecorder: ObservableObject {
             return false
         }
 
-        videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: input,
-            sourcePixelBufferAttributes: attributes)
         self.writer = writer
         videoInput = input
         audioInput = audio
-        pixelPool = createdPool
         fileURL = url
         recordingSize = CGSize(width: width, height: height)
         sessionStart = nil
@@ -143,7 +136,8 @@ final class VideoRecorder: ObservableObject {
     }
 
     func makePixelBuffer() -> CVPixelBuffer? {
-        guard isRecording, let pool = pixelPool else { return nil }
+        guard isRecording, let adaptor = videoAdaptor,
+              let pool = adaptor.pixelBufferPool else { return nil }
         var buffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &buffer)
                 == kCVReturnSuccess else { return nil }
@@ -210,7 +204,6 @@ final class VideoRecorder: ObservableObject {
         videoInput = nil
         videoAdaptor = nil
         audioInput = nil
-        pixelPool = nil
         fileURL = nil
         sessionStart = nil
         lastVideoTime = CMTime.invalid
