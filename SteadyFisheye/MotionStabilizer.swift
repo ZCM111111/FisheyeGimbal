@@ -80,6 +80,7 @@ final class MotionStabilizer: ObservableObject {
     private var horizonQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1))
     private var horizonTiltValue: Float = 0
     private var lastHorizonPublish: TimeInterval = 0
+    private var travelLimitValue: Float = 0.12
     private var activeStatusPublished = false
 
     // Camera coordinates are +X right, +Y down, +Z out through the back camera.
@@ -124,6 +125,15 @@ final class MotionStabilizer: ObservableObject {
             dampingValue = min(max(newValue, 0.15), 4)
             lock.unlock()
         }
+    }
+
+    /// How far the lock is allowed to swing the view away from the phone,
+    /// in radians. The renderer keeps this in step with the lens coverage and
+    /// the angular size of the frame.
+    func setTravelLimit(_ radians: Float) {
+        lock.lock()
+        travelLimitValue = min(max(radians, 0.02), 1.2)
+        lock.unlock()
     }
 
     func snapshot() -> MotionSnapshot {
@@ -221,6 +231,48 @@ final class MotionStabilizer: ObservableObject {
         let lockedCameraToWorld = simd_float3x3(columns: (right, down, forward))
         let lockedDeviceToWorld = lockedCameraToWorld * cameraToDevice
         return simd_quatf(lockedDeviceToWorld)
+    }
+
+    /// Gimbal travel limit.
+    ///
+    /// A locked view eventually swings past the edge of the lens. Clamping the
+    /// correction itself is the wrong fix: once parked at the edge the clamp
+    /// would also cancel the shake, so stabilisation would stop working. A real
+    /// gimbal instead runs out of travel, is pushed along by the hand, and keeps
+    /// stabilising from wherever it ends up.
+    ///
+    /// So when the tilt exceeds the limit, the *reference* is moved with the
+    /// phone and the correction is rebuilt from it: the view follows, and every
+    /// later shake is again compensated relative to the new reference. The roll
+    /// about the optical axis is preserved exactly, so the horizon stays level.
+    ///
+    /// Must be called with `lock` held.
+    private func applyTravelLimit(_ compensation: simd_quatf,
+                                  current: simd_quatf) -> simd_quatf {
+        // The camera's optical axis expressed in the Core Motion device frame.
+        let axis = SIMD3<Float>(0, 0, -1)
+        let tilted = compensation.act(axis)
+        let tilt = acos(min(max(simd_dot(axis, tilted), -1), 1))
+        guard tilt > travelLimitValue, tilt > 1e-3, tilt < 3.0 else {
+            return compensation
+        }
+
+        let tiltAxisVector = simd_cross(axis, tilted)
+        let axisLength = simd_length(tiltAxisVector)
+        guard axisLength > 1e-4 else { return compensation }
+        let tiltAxis = tiltAxisVector / axisLength
+
+        // Split the correction into "tilt of the view direction" and "roll
+        // about it". The roll survives the limit unchanged.
+        let tiltQuaternion = simd_quatf(angle: tilt, axis: tiltAxis)
+        let roll = tiltQuaternion.inverse * compensation
+
+        let limited = simd_quatf(angle: travelLimitValue, axis: tiltAxis) * roll
+        // Move the lock reference to where the phone actually is, so the next
+        // sample measures shake against the new position instead of against a
+        // reference that can never be reached.
+        lockedQuaternion = current * limited
+        return limited
     }
 
     /// Roll-only correction taken straight from gravity, the way a 360 camera
@@ -405,7 +457,11 @@ final class MotionStabilizer: ObservableObject {
         case .hold, .follow:
             // qCurrent^-1 * qLocked maps a ray in the locked device frame into
             // the current device frame.
-            relativeDeviceQuaternion = current.inverse * lockedQuaternion
+            var compensation = current.inverse * lockedQuaternion
+            // Gimbal travel limit: past the edge of the lens the reference
+            // moves with the phone instead of the correction being clipped.
+            compensation = applyTravelLimit(compensation, current: current)
+            relativeDeviceQuaternion = compensation
         case .horizon:
             relativeDeviceQuaternion = horizonCorrection()
         }

@@ -264,11 +264,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let parameters = settings.parameters(sourceSize: CGSize(width: CGFloat(frame.size.x),
                                                                   height: CGFloat(frame.size.y)))
         let snapshot = motion.renderSnapshot(forFrameAt: frame.timestamp)
-        let raw = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
-        let matrix = travelLimited(raw,
-                                   cornerAngle: cornerAngle(parameters: parameters,
-                                                            viewSize: viewSize),
-                                   maxTheta: parameters.maxTheta)
+        // Keep the lock's travel limit in step with what the lens can actually
+        // cover for the current frame shape. The stabiliser owns the limit
+        // logic; this just measures the geometry.
+        let frameAngle = cornerAngle(parameters: parameters, viewSize: viewSize)
+        motion.setTravelLimit(max(parameters.maxTheta - frameAngle - 0.03, 0.05))
+        let matrix = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
         let columns = matrix.columns
 
         return FEUniforms(
@@ -321,33 +322,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
         let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
         return atan(cornerRadius / max(focalOut, 0.001))
-    }
-
-    /// Gimbals have mechanical travel limits; a software lock needs the
-    /// equivalent, or panning far enough slides the sampling window off the
-    /// fisheye disc and the picture smears along the rim.
-    ///
-    /// The compensation is only allowed to swing the optical axis as far as the
-    /// lens can still cover the whole frame. Past that point the view stops
-    /// being world-locked and simply follows the phone, so the frame always
-    /// stays inside the glass.
-    private func travelLimited(_ matrix: simd_float3x3,
-                               cornerAngle: Float,
-                               maxTheta: Float) -> simd_float3x3 {
-        let axis = SIMD3<Float>(0, 0, 1)
-        let rotatedAxis = matrix * axis
-        let offset = acos(min(max(simd_dot(rotatedAxis, axis), -1), 1))
-        guard offset > 1e-4 else { return matrix }
-
-        // Keep a small margin so the very rim is never sampled, and always
-        // leave some stabilisation travel even if the frame is already wide.
-        let limit = max(maxTheta - cornerAngle - 0.03, 0.05)
-        guard offset > limit else { return matrix }
-
-        let quaternion = simd_quatf(matrix)
-        let scaled = simd_quatf(angle: quaternion.angle * (limit / offset),
-                               axis: quaternion.axis)
-        return simd_float3x3(scaled)
     }
 
     /// Mirrors the focal choice in the fragment shader so the panel can show
