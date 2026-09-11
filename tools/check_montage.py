@@ -1,10 +1,21 @@
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+import os
+import sys
+
+# Frame folders are passed on the command line so this file carries no
+# personal paths: python check_montage.py <folder> [folder ...]
+DATA_DIRS = sys.argv[1:]
+if not DATA_DIRS:
+    print("usage: python check_montage.py <frames folder> [more folders]")
+    sys.exit(1)
+
 import glob, os, cv2, numpy as np
 import importlib.util
-spec = importlib.util.spec_from_file_location("st", r"C:\Users\93543\Desktop\SteadyFisheye\tools\struct_test.py")
+spec = importlib.util.spec_from_file_location("st", os.path.join(TOOLS, "struct_test.py"))
 st = importlib.util.module_from_spec(spec); spec.loader.exec_module(st)
 
-arc = sorted(glob.glob(r"D:\桌面文件\训练2\*.png"))[:2] + sorted(glob.glob(r"D:\桌面文件\训练数据\*.png"))[:2]
-home = sorted(glob.glob(r"C:\Users\93543\Downloads\IMG_77*.PNG"))[:2]
+arc = sorted(sum([glob.glob(os.path.join(d, "*.png")) for d in DATA_DIRS[:-1]], []))[:2]
+home = sorted(sum([glob.glob(os.path.join(d, "*")) for d in DATA_DIRS[-1:]], []))[:2]
 files = arc + home
 tiles = []
 for f in files:
@@ -31,7 +42,7 @@ w = max(row1.shape[1], row2.shape[1])
 row1 = cv2.copyMakeBorder(row1,0,0,0,w-row1.shape[1],cv2.BORDER_CONSTANT,value=(20,20,20))
 row2 = cv2.copyMakeBorder(row2,0,0,0,w-row2.shape[1],cv2.BORDER_CONSTANT,value=(20,20,20))
 out = np.vstack([row1,row2])
-cv2.imwrite(r"C:\Users\93543\Desktop\SteadyFisheye\tools\check_montage.jpg", out)
+cv2.imwrite(os.path.join(TOOLS, "check_montage.jpg"), out)
 print("montage:", out.shape)
 for f in files:
     r = st.analyse(f)

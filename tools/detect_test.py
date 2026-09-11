@@ -123,7 +123,7 @@ def analyse(path):
 
 
 def main():
-    files = sorted(glob.glob(r"C:\Users\93543\Downloads\IMG_77*.PNG"))
+    files = sorted(sum([glob.glob(os.path.join(d, "*")) for d in DATA_DIRS], []))
     print(f"{'file':<14}{'ok':<5}{'area':>7}{'fill':>7}{'a/b':>7}{'cx':>8}{'cy':>8}{'rx':>7}   reason")
     print("-" * 82)
     hits = 0

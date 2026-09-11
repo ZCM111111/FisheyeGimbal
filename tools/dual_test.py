@@ -1,3 +1,13 @@
+import os
+import sys
+
+# Frame folders are passed on the command line so this file carries no
+# personal paths: python dual_test.py <folder> [folder ...]
+DATA_DIRS = sys.argv[1:]
+if not DATA_DIRS:
+    print("usage: python dual_test.py <frames folder> [more folders]")
+    sys.exit(1)
+
 """Verifies a dual-mask cabinet detector on both real datasets at once.
 
 The two datasets disagreed: the dim-room frames need a strict violet mask, the
@@ -12,8 +22,8 @@ import os
 import cv2
 import numpy as np
 
-HOME = r"C:\Users\93543\Downloads\IMG_77*.PNG"
-ARCADE_DIRS = [r"D:\桌面文件\训练2", r"D:\桌面文件\训练数据"]
+HOME_GLOB = DATA_DIRS[0]
+ARCADE_DIRS = DATA_DIRS
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dual_out")
 
 MIN_BLOBS = 5
@@ -104,7 +114,7 @@ def detect(path, width=256):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    sets = {"你家(暗房)": sorted(glob.glob(HOME))}
+    sets = {"你家(暗房)": sorted(glob.glob(HOME_GLOB))}
     arcade = []
     for d in ARCADE_DIRS:
         arcade += sorted(glob.glob(os.path.join(d, "*.png")))

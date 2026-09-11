@@ -82,5 +82,5 @@ draw.rounded_rectangle(
     fill=ACCENT,
 )
 
-img.save(r"C:\Users\93543\Desktop\SteadyFisheye\icon-1024.png")
+img.save(os.path.join(REPO, "icon-1024.png"))
 print("written", img.size)

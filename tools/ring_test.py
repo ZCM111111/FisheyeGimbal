@@ -1,3 +1,13 @@
+import os
+import sys
+
+# Frame folders are passed on the command line so this file carries no
+# personal paths: python ring_test.py <folder> [folder ...]
+DATA_DIRS = sys.argv[1:]
+if not DATA_DIRS:
+    print("usage: python ring_test.py <frames folder> [more folders]")
+    sys.exit(1)
+
 """Verifies the lit-button-ring detector across the whole set.
 
 This is the approach that survived testing: the maimai buttons are the most
@@ -16,7 +26,7 @@ import cv2
 import numpy as np
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ring_out")
-FILES = sorted(glob.glob(r"C:\Users\93543\Downloads\IMG_77*.PNG"))
+FILES = sorted(sum([glob.glob(os.path.join(d, "*")) for d in DATA_DIRS], []))
 
 MIN_BLOBS = 5
 MIN_BLOB_AREA = 4

@@ -1,6 +1,16 @@
+import os
+import sys
+
+# Frame folders are passed on the command line so this file carries no
+# personal paths: python ycc_test.py <folder> [folder ...]
+DATA_DIRS = sys.argv[1:]
+if not DATA_DIRS:
+    print("usage: python ycc_test.py <frames folder> [more folders]")
+    sys.exit(1)
+
 import glob, os, cv2, numpy as np
 
-FILES = sorted(glob.glob(r"C:\Users\93543\Downloads\IMG_77*.PNG"))
+FILES = sorted(sum([glob.glob(os.path.join(d, "*")) for d in DATA_DIRS], []))
 
 def run(path, use_ycc):
     raw = cv2.imread(path, cv2.IMREAD_COLOR)

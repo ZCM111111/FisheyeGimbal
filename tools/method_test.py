@@ -1,3 +1,13 @@
+import os
+import sys
+
+# Frame folders are passed on the command line so this file carries no
+# personal paths: python method_test.py <folder> [folder ...]
+DATA_DIRS = sys.argv[1:]
+if not DATA_DIRS:
+    print("usage: python method_test.py <frames folder> [more folders]")
+    sys.exit(1)
+
 """Tries several cabinet-finding strategies on real footage and compares them.
 
 The bright-blob approach already failed here (a wall won in one frame, the white
@@ -21,7 +31,7 @@ import cv2
 import numpy as np
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "method_out")
-FILES = sorted(glob.glob(r"C:\Users\93543\Downloads\IMG_77*.PNG"))
+FILES = sorted(sum([glob.glob(os.path.join(d, "*")) for d in DATA_DIRS], []))
 
 
 def load(path, width=256):

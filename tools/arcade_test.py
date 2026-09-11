@@ -1,3 +1,13 @@
+import os
+import sys
+
+# Frame folders are passed on the command line so this file carries no
+# personal paths: python arcade_test.py <folder> [folder ...]
+DATA_DIRS = sys.argv[1:]
+if not DATA_DIRS:
+    print("usage: python arcade_test.py <frames folder> [more folders]")
+    sys.exit(1)
+
 """Runs the shipped cabinet detector over the arcade first-person set.
 
 The thresholds in the app were tuned on 12 frames from a dim room, where the
@@ -13,7 +23,7 @@ import os
 import cv2
 import numpy as np
 
-DIRS = [r"D:\桌面文件\训练2", r"D:\桌面文件\训练数据"]
+DIRS = DATA_DIRS
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arcade_out")
 
 MIN_BLOBS = 5
