@@ -97,8 +97,8 @@ enum ScreenDetector {
         }
 
         guard let array = firstMultiArray(in: request.results),
-              let inputSide = inputSide(of: request),
-              let best = bestBox(in: array, inputSide: CGFloat(inputSide)) else {
+              let modelSide = inputSide(of: request),
+              let best = bestBox(in: array, inputSide: CGFloat(modelSide)) else {
             return nil
         }
 
@@ -107,7 +107,7 @@ enum ScreenDetector {
         let side = min(width, height)
         let originX = (width - side) * 0.5
         let originY = (height - side) * 0.5
-        let scale = side / CGFloat(inputSide)
+        let scale = side / CGFloat(modelSide)
 
         var center = CGPoint(x: originX + best.box.midX * scale,
                              y: originY + best.box.midY * scale)
