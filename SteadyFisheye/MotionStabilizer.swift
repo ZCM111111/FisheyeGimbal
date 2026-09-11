@@ -235,44 +235,60 @@ final class MotionStabilizer: ObservableObject {
 
     /// Gimbal travel limit.
     ///
-    /// A locked view eventually swings past the edge of the lens. Clamping the
-    /// correction itself is the wrong fix: once parked at the edge the clamp
-    /// would also cancel the shake, so stabilisation would stop working. A real
-    /// gimbal instead runs out of travel, is pushed along by the hand, and keeps
-    /// stabilising from wherever it ends up.
+    /// A locked view eventually swings past the edge of the lens, and clamping
+    /// the correction itself is the wrong fix: parked at the edge the clamp
+    /// would also cancel the shake, so stabilisation would stop working.
     ///
-    /// So when the tilt exceeds the limit, the *reference* is moved with the
-    /// phone and the correction is rebuilt from it: the view follows, and every
-    /// later shake is again compensated relative to the new reference. The roll
-    /// about the optical axis is preserved exactly, so the horizon stays level.
+    /// Instead the lock re-centres itself once it passes **80%** of the travel
+    /// range, accelerating toward the hard stop. The view therefore follows the
+    /// hand before it ever reaches the end, and every shake keeps being
+    /// compensated against the reference as it drifts. A real gimbal behaves
+    /// the same way.
     ///
     /// Must be called with `lock` held.
     private func applyTravelLimit(_ compensation: simd_quatf,
-                                  current: simd_quatf) -> simd_quatf {
+                                  current: simd_quatf,
+                                  dt: Double) -> simd_quatf {
         // The camera's optical axis expressed in the Core Motion device frame.
         let axis = SIMD3<Float>(0, 0, -1)
         let tilted = compensation.act(axis)
         let tilt = acos(min(max(simd_dot(axis, tilted), -1), 1))
-        guard tilt > travelLimitValue, tilt > 1e-3, tilt < 3.0 else {
+        let softStart = travelLimitValue * 0.8
+        guard tilt > softStart, tilt > 1e-3, tilt < 3.0 else {
             return compensation
         }
 
-        let tiltAxisVector = simd_cross(axis, tilted)
-        let axisLength = simd_length(tiltAxisVector)
-        guard axisLength > 1e-4 else { return compensation }
-        let tiltAxis = tiltAxisVector / axisLength
+        // Past 80% of the travel the lock re-centres itself: gently at first,
+        // then faster as the edge approaches, so the view follows the hand
+        // instead of ever parking against the end stop.
+        //
+        // The reference drifts toward a *level* version of the current
+        // attitude, not the raw one, so re-centring cannot introduce a tilt in
+        // the horizon on the way.
+        let excess = min(max((tilt - softStart) / max(travelLimitValue - softStart, 1e-4), 0), 1)
+        let tau = Double(1.6 - 1.45 * excess)
+        let beta = Float(1 - exp(-dt / max(tau, 0.05)))
+        lockedQuaternion = slerpShortest(lockedQuaternion,
+                                         levelLockedAttitude(from: current),
+                                         amount: beta)
 
-        // Split the correction into "tilt of the view direction" and "roll
-        // about it". The roll survives the limit unchanged.
-        let tiltQuaternion = simd_quatf(angle: tilt, axis: tiltAxis)
-        let roll = tiltQuaternion.inverse * compensation
+        var updated = current.inverse * lockedQuaternion
 
-        let limited = simd_quatf(angle: travelLimitValue, axis: tiltAxis) * roll
-        // Move the lock reference to where the phone actually is, so the next
-        // sample measures shake against the new position instead of against a
-        // reference that can never be reached.
-        lockedQuaternion = current * limited
-        return limited
+        // Hard stop as a last resort, so the frame can never leave the glass.
+        let updatedAxis = updated.act(axis)
+        let updatedTilt = acos(min(max(simd_dot(axis, updatedAxis), -1), 1))
+        if updatedTilt > travelLimitValue, updatedTilt < 3.0 {
+            let tiltAxisVector = simd_cross(axis, updatedAxis)
+            let axisLength = simd_length(tiltAxisVector)
+            if axisLength > 1e-4 {
+                let tiltAxis = tiltAxisVector / axisLength
+                let tiltQuaternion = simd_quatf(angle: updatedTilt, axis: tiltAxis)
+                let roll = tiltQuaternion.inverse * updated
+                updated = simd_quatf(angle: travelLimitValue, axis: tiltAxis) * roll
+                lockedQuaternion = current * updated
+            }
+        }
+        return updated
     }
 
     /// Roll-only correction taken straight from gravity, the way a 360 camera
@@ -460,7 +476,7 @@ final class MotionStabilizer: ObservableObject {
             var compensation = current.inverse * lockedQuaternion
             // Gimbal travel limit: past the edge of the lens the reference
             // moves with the phone instead of the correction being clipped.
-            compensation = applyTravelLimit(compensation, current: current)
+            compensation = applyTravelLimit(compensation, current: current, dt: dt)
             relativeDeviceQuaternion = compensation
         case .horizon:
             relativeDeviceQuaternion = horizonCorrection()
