@@ -7,7 +7,8 @@ struct ContentView: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
-    @State private var showControls = true
+
+    @State private var showControls = false
     @State private var rendererFailed = false
     @State private var baseFov: Float?
 
@@ -31,35 +32,13 @@ struct ContentView: View {
                 )
 
             VStack(spacing: 0) {
-                topBar
+                statusBar
                 Spacer()
-                if showControls {
-                    ControlPanel(app: app,
-                                 settings: settings,
-                                 motion: motion,
-                                 camera: camera)
-                        .frame(maxWidth: 430)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 8)
-                } else {
-                    bottomBar
-                }
-            }
-
-            if let error = camera.error {
-                VStack {
-                    Spacer()
-                    Text(error)
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .padding(10)
-                        .background(.red.opacity(0.88), in: RoundedRectangle(cornerRadius: 8))
-                        .padding()
-                }
+                bottomBar
             }
 
             if rendererFailed {
-                Color.black.opacity(0.88).ignoresSafeArea()
+                Color.black.opacity(0.9).ignoresSafeArea()
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
@@ -69,171 +48,179 @@ struct ContentView: View {
                 .foregroundStyle(.white)
             }
         }
+        .sheet(isPresented: $showControls) {
+            SettingsSheet(settings: settings,
+                          motion: motion,
+                          camera: camera,
+                          dismiss: { showControls = false })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.ultraThinMaterial)
+        }
         .onAppear { app.start() }
         .onDisappear { app.stop() }
     }
 
-    private var topBar: some View {
+    private var statusBar: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(camera.running ? Color.green : Color.orange)
-                    .frame(width: 8, height: 8)
-                Text(camera.running ? camera.formatText : "Camera stopped")
-                    .lineLimit(1)
-            }
-
+            Label(camera.running ? "LIVE" : "WAITING",
+                  systemImage: camera.running ? "video.fill" : "video.slash")
+                .foregroundStyle(camera.running ? .green : .orange)
+            Text(camera.formatText)
+                .lineLimit(1)
+                .foregroundStyle(.white.opacity(0.75))
             Spacer()
-
-            HStack(spacing: 6) {
-                Image(systemName: motion.locked ? "gyroscope" : "gyroscope")
-                Text(motion.status)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(motion.available ? Color.green : Color.orange)
-
-            Button {
-                motion.recenter()
-            } label: {
-                Label("Recenter", systemImage: "scope")
+            Label(motion.locked ? "LOCKED" : "IMU…", systemImage: "gyroscope")
+                .foregroundStyle(motion.available ? .green : .orange)
+            Button { motion.recenter() } label: {
+                Image(systemName: "scope")
             }
             .buttonStyle(.borderedProminent)
             .tint(.blue)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { showControls.toggle() }
-            } label: {
-                Image(systemName: showControls ? "slider.horizontal.3" : "slider.horizontal.3")
+            Button { showControls = true } label: {
+                Image(systemName: "slider.horizontal.3")
             }
             .buttonStyle(.bordered)
-            .accessibilityLabel("Camera controls")
+            .accessibilityLabel("Open camera settings")
         }
-        .font(.caption)
+        .font(.caption.bold())
         .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.black.opacity(0.48), in: Capsule())
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.black.opacity(0.55), in: Capsule())
         .padding(.horizontal, 10)
         .padding(.top, 8)
     }
 
     private var bottomBar: some View {
-        HStack {
-            Text(camera.running ? "\(camera.formatText)  |  FOV \(Int(settings.outputFov))°" : "Waiting for camera")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.white.opacity(0.85))
-            Spacer()
+        HStack(spacing: 12) {
+            Text("FOV \(Int(settings.outputFov))°")
+            Text("•")
+                .foregroundStyle(.white.opacity(0.4))
             Text(motion.mode.title)
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.85))
+            Spacer()
+            Text("Pinch to zoom")
+                .foregroundStyle(.white.opacity(0.6))
         }
-        .padding(.horizontal, 12)
+        .font(.caption2.monospaced())
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 13)
         .padding(.vertical, 9)
-        .background(.black.opacity(0.48), in: Capsule())
+        .background(.black.opacity(0.55), in: Capsule())
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
     }
 }
 
-private struct ControlPanel: View {
-    @ObservedObject var app: CameraApp
+private struct SettingsSheet: View {
     @ObservedObject var settings: FisheyeSettings
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
+    let dismiss: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Stabilized fisheye preview")
-                        .font(.headline)
-                    Spacer()
-                    Button {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Stabilization", selection: Binding(
+                        get: { motion.mode },
+                        set: { motion.setMode($0) }
+                    )) {
+                        ForEach(MotionStabilizer.Mode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    Picker("Camera lens", selection: Binding(
+                        get: { camera.lens },
+                        set: { camera.setLens($0) }
+                    )) {
+                        ForEach(CameraService.Lens.allCases) { lens in
+                            Text(lens.title).tag(lens)
+                        }
+                    }
+                } header: {
+                    Text("Camera")
+                }
+
+                Section {
+                    slider("Output FOV", value: $settings.outputFov, range: 30...130, suffix: "°")
+                    slider("Lens half FOV", value: $settings.lensHalfFov, range: 60...120, suffix: "°")
+                    slider("Circle scale", value: $settings.circleScale, range: 0.70...1.15, suffix: "x")
+                    Picker("Projection", selection: $settings.projection) {
+                        ForEach(FisheyeProjection.allCases) { projection in
+                            Text(projection.title).tag(projection)
+                        }
+                    }
+                } header: {
+                    Text("Lens geometry")
+                } footer: {
+                    Text("Start with the lens half FOV and circle scale. Use a straight door frame or table edge as the reference.")
+                }
+
+                Section {
+                    slider("Radial k1", value: $settings.k1, range: -0.35...0.35, suffix: "")
+                    slider("Radial k2", value: $settings.k2, range: -0.20...0.20, suffix: "")
+                    slider("Center X", value: $settings.centerX, range: -0.12...0.12, suffix: "")
+                    slider("Center Y", value: $settings.centerY, range: -0.12...0.12, suffix: "")
+                    slider("Edge feather", value: $settings.edgeFeather, range: 0...0.12, suffix: "")
+                    Button("Reset lens calibration", role: .destructive) {
                         settings.resetLens()
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
                     }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Reset lens calibration")
+                } header: {
+                    Text("Manual calibration")
+                } footer: {
+                    Text("Adjust k1/k2 until straight lines become straight. Center X/Y correct a clip-on lens that is not perfectly centered.")
                 }
 
-                Picker("Stabilization", selection: Binding(
-                    get: { motion.mode },
-                    set: { motion.setMode($0) }
-                )) {
-                    ForEach(MotionStabilizer.Mode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                Section {
+                    slider("Sensor smoothing", value: Binding(
+                        get: { Float(motion.smoothing) },
+                        set: { motion.smoothing = Double($0) }
+                    ), range: 0...0.30, suffix: "s")
+                    slider("Display smoothing", value: Binding(
+                        get: { Float(motion.displaySmoothing) },
+                        set: { motion.displaySmoothing = Double($0) }
+                    ), range: 0...0.18, suffix: "s")
+                    if motion.mode == .follow {
+                        slider("Follow time", value: Binding(
+                            get: { Float(motion.dampingTime) },
+                            set: { motion.dampingTime = Double($0) }
+                        ), range: 0.2...3.0, suffix: "s")
                     }
-                }
-                .pickerStyle(.segmented)
-
-                Picker("Camera lens", selection: Binding(
-                    get: { camera.lens },
-                    set: { camera.setLens($0) }
-                )) {
-                    ForEach(CameraService.Lens.allCases) { lens in
-                        Text(lens.title).tag(lens)
+                    Button("Recenter / lock current direction") {
+                        motion.recenter()
                     }
-                }
-                .pickerStyle(.segmented)
-
-                slider("Output FOV", value: $settings.outputFov, range: 30...130, suffix: "°")
-                slider("Lens half FOV", value: $settings.lensHalfFov, range: 60...120, suffix: "°")
-                slider("Circle scale", value: $settings.circleScale, range: 0.70...1.15, suffix: "x")
-
-                Picker("Fisheye projection", selection: $settings.projection) {
-                    ForEach(FisheyeProjection.allCases) { projection in
-                        Text(projection.title).tag(projection)
-                    }
-                }
-                .pickerStyle(.menu)
-
-                Divider().overlay(.white.opacity(0.25))
-                Text("Calibration")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white.opacity(0.75))
-                slider("Radial k1", value: $settings.k1, range: -0.35...0.35, suffix: "")
-                slider("Radial k2", value: $settings.k2, range: -0.20...0.20, suffix: "")
-                slider("Center X", value: $settings.centerX, range: -0.12...0.12, suffix: "")
-                slider("Center Y", value: $settings.centerY, range: -0.12...0.12, suffix: "")
-                slider("Edge feather", value: $settings.edgeFeather, range: 0...0.12, suffix: "")
-
-                Divider().overlay(.white.opacity(0.25))
-                Text("Motion")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white.opacity(0.75))
-                slider("Smoothing", value: Binding(
-                    get: { Float(motion.smoothing) },
-                    set: { motion.smoothing = Double($0) }
-                ), range: 0...0.35, suffix: "s")
-                if motion.mode == .follow {
-                    slider("Follow time", value: Binding(
-                        get: { Float(motion.dampingTime) },
-                        set: { motion.dampingTime = Double($0) }
-                    ), range: 0.2...3.0, suffix: "s")
+                } header: {
+                    Text("Stabilization")
+                } footer: {
+                    Text("More smoothing is steadier but adds delay. Display smoothing removes tiny sample-to-display timing jumps.")
                 }
             }
-            .padding(14)
+            .navigationTitle("SteadyFisheye")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: dismiss)
+                }
+            }
         }
-        .frame(maxHeight: 430)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .environment(\.colorScheme, .dark)
     }
 
     private func slider(_ title: String,
                         value: Binding<Float>,
                         range: ClosedRange<Float>,
                         suffix: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(title).font(.caption2)
+                Text(title)
                 Spacer()
                 Text(String(format: "%.3f", value.wrappedValue) + suffix)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
             Slider(value: value, in: range)
         }
+        .padding(.vertical, 2)
     }
 }
 
@@ -243,9 +230,7 @@ private struct MetalPreview: UIViewRepresentable {
     let motion: MotionStabilizer
     @Binding var failed: Bool
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(camera: camera)
-    }
+    func makeCoordinator() -> Coordinator { Coordinator(camera: camera) }
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
@@ -280,8 +265,6 @@ private struct MetalPreview: UIViewRepresentable {
         let camera: CameraService
         var renderer: MetalRenderer?
 
-        init(camera: CameraService) {
-            self.camera = camera
-        }
+        init(camera: CameraService) { self.camera = camera }
     }
 }

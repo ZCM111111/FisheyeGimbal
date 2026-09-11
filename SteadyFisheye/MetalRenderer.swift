@@ -21,12 +21,14 @@ private final class SourceFrame {
     let textures: [MTLTexture]
     let wrappers: [CVMetalTexture]
     let format: UInt32
+    let timestamp: Double
     let size: SIMD2<Float>
 
     init(pixelBuffer: CVPixelBuffer,
          textures: [MTLTexture],
          wrappers: [CVMetalTexture],
          format: UInt32,
+         timestamp: Double,
          size: SIMD2<Float>) {
         self.pixelBuffer = pixelBuffer
         self.textures = textures
@@ -110,7 +112,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     func enqueue(pixelBuffer: CVPixelBuffer, timestamp: Double) {
-        guard let frame = makeFrame(pixelBuffer: pixelBuffer) else { return }
+        guard let frame = makeFrame(pixelBuffer: pixelBuffer, timestamp: timestamp) else { return }
         frameLock.lock()
         latestFrame = frame
         frameLock.unlock()
@@ -126,7 +128,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         lastFrameTimestamp = now
     }
 
-    private func makeFrame(pixelBuffer: CVPixelBuffer) -> SourceFrame? {
+    private func makeFrame(pixelBuffer: CVPixelBuffer, timestamp: Double) -> SourceFrame? {
         let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -182,6 +184,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                            textures: textures,
                            wrappers: wrappers,
                            format: sourceFormat,
+                           timestamp: timestamp,
                            size: SIMD2<Float>(Float(width), Float(height)))
     }
 
@@ -255,7 +258,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private func makeUniforms(frame: SourceFrame, viewSize: CGSize) -> FEUniforms {
         let parameters = settings.parameters(sourceSize: CGSize(width: CGFloat(frame.size.x),
                                                                   height: CGFloat(frame.size.y)))
-        let snapshot = motion.snapshot()
+        let snapshot = motion.renderSnapshot(forFrameAt: frame.timestamp)
         let matrix = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
         let columns = matrix.columns
 

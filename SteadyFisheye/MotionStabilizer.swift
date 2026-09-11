@@ -5,8 +5,17 @@ import simd
 
 struct MotionSnapshot {
     var cameraFromLocked: simd_float3x3 = matrix_identity_float3x3
+    /// Relative rotation in Core Motion's device coordinate frame.
+    var relativeDeviceQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    var lockVersion: UInt64 = 0
     var timestamp: TimeInterval = 0
     var valid = false
+}
+
+private struct MotionSample {
+    var timestamp: TimeInterval
+    var quaternion: simd_quatf
+    var lockVersion: UInt64
 }
 
 final class MotionStabilizer: ObservableObject {
@@ -39,13 +48,22 @@ final class MotionStabilizer: ObservableObject {
     private let lock = NSLock()
 
     private var latest = MotionSnapshot()
+    private var samples: [MotionSample] = []
+    private let maxSampleCount = 36
     private var filtered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
     private var lockedQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
     private var hasSample = false
     private var lastTimestamp: TimeInterval = 0
     private var modeValue: Mode = .hold
-    private var smoothingValue: Double = 0.08
+    private var smoothingValue: Double = 0.055
     private var dampingValue: Double = 1.0
+    private var lockVersion: UInt64 = 0
+    private var renderQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    private var renderVersion: UInt64 = 0
+    private var lastRenderedSampleTime: TimeInterval = 0
+    private var hasRenderedSample = false
+    private var displaySmoothingValue: Double = 0.035
+    private var activeStatusPublished = false
 
     // Camera coordinates are +X right, +Y down, +Z out through the back camera.
     // Core Motion uses +X right, +Y up, +Z toward the screen/user.
@@ -67,6 +85,18 @@ final class MotionStabilizer: ObservableObject {
         }
     }
 
+    var displaySmoothing: Double {
+        get {
+            lock.lock(); defer { lock.unlock() }
+            return displaySmoothingValue
+        }
+        set {
+            lock.lock()
+            displaySmoothingValue = min(max(newValue, 0), 0.25)
+            lock.unlock()
+        }
+    }
+
     var dampingTime: Double {
         get {
             lock.lock(); defer { lock.unlock() }
@@ -82,6 +112,54 @@ final class MotionStabilizer: ObservableObject {
     func snapshot() -> MotionSnapshot {
         lock.lock(); defer { lock.unlock() }
         return latest
+    }
+
+    /// Gets the pose that belongs to one camera frame. Motion arrives at a
+    /// different rate from video, so selecting the nearest/interpolated IMU
+    /// sample prevents alternating old/new poses from becoming visible jitter.
+    func renderSnapshot(forFrameAt frameTime: TimeInterval) -> MotionSnapshot {
+        lock.lock()
+        let current = latest
+        guard current.valid else {
+            lock.unlock()
+            return current
+        }
+
+        let timeIsUsable = frameTime.isFinite && frameTime > 0
+            && abs(frameTime - current.timestamp) < 1.0
+        let requestedTime = timeIsUsable ? frameTime : current.timestamp
+        let target = timeIsUsable ? sampleLocked(at: requestedTime) : MotionSample(
+            timestamp: current.timestamp,
+            quaternion: current.relativeDeviceQuaternion,
+            lockVersion: current.lockVersion
+        )
+
+        if !hasRenderedSample || target.lockVersion != renderVersion {
+            renderQuaternion = target.quaternion
+            renderVersion = target.lockVersion
+            hasRenderedSample = true
+        } else if target.timestamp > lastRenderedSampleTime + 0.0005 {
+            let dt = min(max(target.timestamp - lastRenderedSampleTime, 1.0 / 120.0), 0.1)
+            let alpha = displaySmoothingValue <= 0
+                ? 1
+                : 1 - exp(-dt / displaySmoothingValue)
+            renderQuaternion = slerpShortest(
+                renderQuaternion,
+                target.quaternion,
+                amount: Float(min(max(alpha, 0), 1))
+            )
+        }
+        lastRenderedSampleTime = max(lastRenderedSampleTime, target.timestamp)
+        let outputQuaternion = renderQuaternion
+        lock.unlock()
+
+        var result = current
+        result.timestamp = target.timestamp
+        result.relativeDeviceQuaternion = outputQuaternion
+        result.cameraFromLocked = cameraToDevice
+            * simd_float3x3(outputQuaternion)
+            * cameraToDevice
+        return result
     }
 
     func start() {
@@ -108,6 +186,13 @@ final class MotionStabilizer: ObservableObject {
         manager.stopDeviceMotionUpdates()
         lock.lock()
         latest = MotionSnapshot()
+        samples.removeAll(keepingCapacity: true)
+        lockVersion = 0
+        renderQuaternion = identityQuaternion()
+        renderVersion = 0
+        hasRenderedSample = false
+        lastRenderedSampleTime = 0
+        activeStatusPublished = false
         hasSample = false
         lastTimestamp = 0
         lock.unlock()
@@ -118,8 +203,20 @@ final class MotionStabilizer: ObservableObject {
         lock.lock()
         if hasSample {
             lockedQuaternion = filtered
-            latest.cameraFromLocked = cameraToDevice * simd_float3x3(filtered.inverse * lockedQuaternion) * cameraToDevice
+            lockVersion &+= 1
+            let identity = identityQuaternion()
+            latest.relativeDeviceQuaternion = identity
+            latest.cameraFromLocked = matrix_identity_float3x3
+            latest.lockVersion = lockVersion
             latest.valid = true
+            samples.removeAll(keepingCapacity: true)
+            samples.append(MotionSample(timestamp: lastTimestamp,
+                                        quaternion: identity,
+                                        lockVersion: lockVersion))
+            renderQuaternion = identity
+            renderVersion = lockVersion
+            lastRenderedSampleTime = lastTimestamp
+            hasRenderedSample = true
         }
         lock.unlock()
     }
@@ -129,6 +226,19 @@ final class MotionStabilizer: ObservableObject {
         modeValue = newMode
         if hasSample {
             lockedQuaternion = filtered
+            lockVersion &+= 1
+            let identity = identityQuaternion()
+            latest.relativeDeviceQuaternion = identity
+            latest.cameraFromLocked = matrix_identity_float3x3
+            latest.lockVersion = lockVersion
+            samples.removeAll(keepingCapacity: true)
+            samples.append(MotionSample(timestamp: lastTimestamp,
+                                        quaternion: identity,
+                                        lockVersion: lockVersion))
+            renderQuaternion = identity
+            renderVersion = lockVersion
+            lastRenderedSampleTime = lastTimestamp
+            hasRenderedSample = true
         }
         lock.unlock()
         DispatchQueue.main.async { [weak self] in
@@ -155,7 +265,8 @@ final class MotionStabilizer: ObservableObject {
         let dt = min(max(timestamp - lastTimestamp, 1.0 / 240.0), 0.25)
         lastTimestamp = timestamp
         let alpha = smoothingValue <= 0 ? 1 : 1 - exp(-dt / smoothingValue)
-        filtered = slerpShortest(filtered, current, amount: Float(min(max(alpha, 0), 1)))
+        filtered = slerpShortest(filtered, current,
+                                 amount: Float(min(max(alpha, 0), 1)))
 
         if modeValue == .follow {
             let beta = 1 - exp(-dt / max(dampingValue, 0.15))
@@ -168,15 +279,56 @@ final class MotionStabilizer: ObservableObject {
         let relativeDevice = simd_float3x3(filtered.inverse * lockedQuaternion)
         let relativeCamera = cameraToDevice * relativeDevice * cameraToDevice
         latest.cameraFromLocked = relativeCamera
+        latest.relativeDeviceQuaternion = relativeDevice
+        latest.lockVersion = lockVersion
         latest.timestamp = timestamp
         latest.valid = true
+        samples.append(MotionSample(timestamp: timestamp,
+                                    quaternion: relativeDevice,
+                                    lockVersion: lockVersion))
+        if samples.count > maxSampleCount {
+            samples.removeFirst(samples.count - maxSampleCount)
+        }
         lock.unlock()
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if !self.locked { self.locked = true }
-            if self.status != "Motion active" { self.status = "Motion active" }
+        lock.lock()
+        let shouldPublishActive = !activeStatusPublished
+        activeStatusPublished = true
+        lock.unlock()
+        if shouldPublishActive {
+            DispatchQueue.main.async { [weak self] in
+                self?.locked = true
+                self?.status = "Motion active"
+            }
         }
+    }
+
+    private func sampleLocked(at time: TimeInterval) -> MotionSample {
+        guard let first = samples.first, let last = samples.last else {
+            return MotionSample(timestamp: latest.timestamp,
+                                quaternion: latest.relativeDeviceQuaternion,
+                                lockVersion: latest.lockVersion)
+        }
+        if time <= first.timestamp { return first }
+        if time >= last.timestamp { return last }
+
+        for index in 1..<samples.count {
+            let upper = samples[index]
+            guard time <= upper.timestamp else { continue }
+            let lower = samples[index - 1]
+            guard upper.lockVersion == lower.lockVersion else {
+                return time < upper.timestamp ? lower : upper
+            }
+            let span = max(upper.timestamp - lower.timestamp, 0.000001)
+            let amount = Float(min(max((time - lower.timestamp) / span, 0), 1))
+            return MotionSample(
+                timestamp: time,
+                quaternion: slerpShortest(lower.quaternion, upper.quaternion,
+                                           amount: amount),
+                lockVersion: upper.lockVersion
+            )
+        }
+        return last
     }
 
     private func publishAvailability(_ value: Bool, status: String) {
@@ -184,6 +336,10 @@ final class MotionStabilizer: ObservableObject {
             self?.available = value
             self?.status = status
         }
+    }
+
+    private func identityQuaternion() -> simd_quatf {
+        simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
     }
 
     private func slerpShortest(_ a: simd_quatf,
