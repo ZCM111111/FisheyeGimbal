@@ -54,6 +54,14 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     /// bias can be driven after configuration has finished.
     private var activeDevice: AVCaptureDevice?
 
+    // Bias updates arrive far faster than the hardware should be reconfigured,
+    // so the newest request is coalesced instead of queueing every drag event.
+    private let biasLock = NSLock()
+    private var pendingBias: Float?
+    private var biasGeneration: UInt64 = 0
+    private var biasApplyScheduled = false
+    private var lastBiasPublish: CFTimeInterval = 0
+
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
     private var pendingCalibration: ((AutoCalibrator.LumaGrid?) -> Void)?
@@ -143,16 +151,29 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     // MARK: - Focus and exposure
 
+    /// Runs `body` with the device locked for configuration.
+    ///
+    /// Every device change goes through here. `unlockForConfiguration()` raises
+    /// an Objective-C exception — an immediate crash — when the matching lock
+    /// did not succeed, so the lock is always proven before the unlock, and no
+    /// caller is allowed to hand-roll the pairing.
+    private func withDevice(_ body: (AVCaptureDevice) -> Void) {
+        guard let device = activeDevice else { return }
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        body(device)
+        device.unlockForConfiguration()
+    }
+
     /// Focuses and meters at a point in the sensor's normalised coordinate
     /// space — the space `AVCaptureDevice` expects, where (0,0) is the top-left
     /// of the unrotated sensor. Callers must convert from a preview point
     /// through the lens mapping first; a raw screen coordinate would land in
     /// the wrong place once the fisheye correction is applied.
     func focusAndExpose(atDevicePoint point: CGPoint) {
+        guard point.x >= 0, point.x <= 1, point.y >= 0, point.y <= 1 else { return }
         sessionQueue.async { [weak self] in
-            guard let self, let device = self.activeDevice else { return }
-            do {
-                try device.lockForConfiguration()
+            guard let self else { return }
+            self.withDevice { device in
                 if device.isFocusPointOfInterestSupported,
                    device.isFocusModeSupported(.autoFocus) {
                     device.focusPointOfInterest = point
@@ -163,9 +184,6 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                     device.exposurePointOfInterest = point
                     device.exposureMode = .autoExpose
                 }
-                device.unlockForConfiguration()
-            } catch {
-                return
             }
 
             // Apple focuses once on the tapped point and then keeps tracking
@@ -173,29 +191,64 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             // distance. Hand back to the continuous modes after the one-shot
             // has had time to settle.
             self.sessionQueue.asyncAfter(deadline: .now() + 1.6) { [weak self] in
-                guard let self, let device = self.activeDevice else { return }
-                guard !self.aeafLockedSnapshot else { return }
-                // Unlocking a device that was never locked raises an ObjC
-                // exception, so the lock has to be proven first.
-                guard (try? device.lockForConfiguration()) != nil else { return }
-                if device.isFocusModeSupported(.continuousAutoFocus) {
-                    device.focusMode = .continuousAutoFocus
+                guard let self, !self.aeafLockedSnapshot else { return }
+                self.withDevice { device in
+                    if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
+                    if device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
                 }
-                if device.isExposureModeSupported(.continuousAutoExposure) {
-                    device.exposureMode = .continuousAutoExposure
-                }
-                device.unlockForConfiguration()
             }
         }
     }
 
+    /// Exposure compensation. The slider emits events far faster than the
+    /// capture device should be reconfigured, so superseded values are dropped
+    /// and only the newest one within each short window reaches the hardware.
+    ///
+    /// `setExposureTargetBias` is documented as not needing the configuration
+    /// lock, so it is deliberately left on that path rather than wrapped in
+    /// `withDevice` along with the mode changes.
     func setExposureBias(_ value: Float) {
-        sessionQueue.async { [weak self] in
-            guard let self, let device = self.activeDevice else { return }
-            let clamped = min(max(value, device.minExposureTargetBias),
-                              device.maxExposureTargetBias)
+        biasLock.lock()
+        pendingBias = value
+        biasGeneration &+= 1
+        let generation = biasGeneration
+        let shouldSchedule = !biasApplyScheduled
+        biasApplyScheduled = true
+        biasLock.unlock()
+        guard shouldSchedule else { return }
+
+        sessionQueue.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+            guard let self else { return }
+            self.biasLock.lock()
+            let latest = self.pendingBias
+            let current = self.biasGeneration
+            self.pendingBias = nil
+            self.biasApplyScheduled = false
+            self.biasLock.unlock()
+            // A newer drag event arrived while this one was waiting: skip it,
+            // the newer value is already on its way.
+            guard let latest = latest, current == generation else { return }
+            guard let device = self.activeDevice else { return }
+
+            let low = device.minExposureTargetBias
+            let high = max(device.maxExposureTargetBias, low)
+            let clamped = min(max(latest, low), high)
             device.setExposureTargetBias(clamped, completionHandler: nil)
-            DispatchQueue.main.async { self.exposureBias = clamped }
+
+            // Publish at most a few times a second: the readouts only need to
+            // keep up with the eye, and rebuilding the panel on every drag
+            // event is pointless work.
+            let now = CACurrentMediaTime()
+            guard now - self.lastBiasPublish > 0.08 else { return }
+            self.lastBiasPublish = now
+            DispatchQueue.main.async {
+                self.exposureBias = clamped
+                self.exposureBiasRange = low...high
+            }
         }
     }
 
@@ -203,30 +256,36 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     /// current focus and exposure are frozen until the user unlocks them.
     func setAEAFLocked(_ locked: Bool) {
         sessionQueue.async { [weak self] in
-            guard let self, let device = self.activeDevice else { return }
+            guard let self else { return }
             self.aeafLockedSnapshot = locked
-            guard (try? device.lockForConfiguration()) != nil else { return }
-            if locked {
-                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
-                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
-            } else {
-                if device.isFocusModeSupported(.continuousAutoFocus) {
-                    device.focusMode = .continuousAutoFocus
-                }
-                if device.isExposureModeSupported(.continuousAutoExposure) {
-                    device.exposureMode = .continuousAutoExposure
-                }
-                // Drop the point of interest so the system meters the whole
-                // frame again, the way it does when you dismiss the lock.
-                if device.isExposurePointOfInterestSupported {
-                    device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5)
-                }
-                if device.isFocusPointOfInterestSupported {
-                    device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
+            self.withDevice { device in
+                if locked {
+                    if device.isFocusModeSupported(.locked) {
+                        device.focusMode = .locked
+                    }
+                    if device.isExposureModeSupported(.locked) {
+                        device.exposureMode = .locked
+                    }
+                } else {
+                    if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
+                    if device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
+                    // Drop the points of interest so the system meters and
+                    // focuses the whole frame again, the way it does when you
+                    // dismiss the lock in the system camera.
+                    if device.isExposurePointOfInterestSupported {
+                        device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5)
+                    }
+                    if device.isFocusPointOfInterestSupported {
+                        device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
+                    }
                 }
             }
-            device.unlockForConfiguration()
-            DispatchQueue.main.async { self.aeafLocked = locked }
+            let value = locked
+            DispatchQueue.main.async { self.aeafLocked = value }
         }
     }
 
@@ -282,11 +341,15 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             device.activeVideoMaxFrameDuration = targetDuration
 
             // Publish the exposure compensation range this device actually
-            // accepts, so the UI slider can span exactly that.
-            let biasRange = device.minExposureTargetBias...device.maxExposureTargetBias
-            let initialBias = device.exposureTargetBias
+            // accepts, so the UI slider can span exactly that. The upper bound
+            // is forced to be at least the lower one: building a ClosedRange
+            // with upper < lower traps at runtime, and a device that reports
+            // inconsistent limits would otherwise take the whole app down.
+            let low = device.minExposureTargetBias
+            let high = max(device.maxExposureTargetBias, low)
+            let initialBias = min(max(device.exposureTargetBias, low), high)
             DispatchQueue.main.async { [weak self] in
-                self?.exposureBiasRange = biasRange
+                self?.exposureBiasRange = low...high
                 self?.exposureBias = initialBias
             }
             device.unlockForConfiguration()
