@@ -153,7 +153,8 @@ def main():
     for target in args:
         if os.path.isdir(target):
             analyse(frames_from_folder(target), os.path.basename(target),
-                    montage and montage.replace(".jpg", f"-{os.path.basename(target)}.jpg"))
+                    montage and montage.replace(".jpg", f"-{os.path.basename(target)}.jpg"),
+                    consecutive=False)
         elif os.path.isfile(target):
             analyse(frames_from_video(target), os.path.basename(target), montage)
         else:
