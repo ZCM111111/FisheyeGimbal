@@ -16,7 +16,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Theme.bg.ignoresSafeArea()
 
             MetalPreview(camera: camera,
                          settings: settings,
@@ -39,23 +39,28 @@ struct ContentView: View {
                 bottomBar
             }
 
+            // The console floats at the top-trailing corner so the centre of
+            // the frame stays unobstructed, and it can be dragged anywhere.
             if showControls {
                 VStack {
                     HStack(alignment: .top) {
                         Spacer(minLength: 0)
-                        FloatingControls(settings: settings,
-                                         motion: motion,
-                                         camera: camera,
-                                         dismiss: { withAnimation(.easeOut(duration: 0.2)) { showControls = false } })
-                            .frame(maxWidth: 330)
+                        ControlPanel(settings: settings,
+                                     motion: motion,
+                                     camera: camera,
+                                     dismiss: {
+                                         withAnimation(.easeOut(duration: 0.2)) { showControls = false }
+                                     })
                             .offset(panelOffset)
                             .gesture(
                                 DragGesture()
                                     .onChanged { value in
                                         if dragStartOffset == nil { dragStartOffset = panelOffset }
                                         let start = dragStartOffset ?? panelOffset
-                                        panelOffset = CGSize(width: start.width + value.translation.width,
-                                                             height: start.height + value.translation.height)
+                                        panelOffset = CGSize(
+                                            width: start.width + value.translation.width,
+                                            height: start.height + value.translation.height
+                                        )
                                     }
                                     .onEnded { _ in dragStartOffset = nil }
                             )
@@ -63,211 +68,119 @@ struct ContentView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 64)
-                .padding(.bottom, 72)
+                .padding(.horizontal, Theme.sp3)
+                .padding(.top, 62)
+                .padding(.bottom, 70)
             }
 
             if rendererFailed {
-                Color.black.opacity(0.9).ignoresSafeArea()
-                VStack(spacing: 10) {
+                Theme.bgElevated.ignoresSafeArea()
+                VStack(spacing: Theme.sp3) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.largeTitle)
-                    Text("Metal is unavailable on this device")
-                        .font(.headline)
+                        .font(.title)
+                        .foregroundColor(Theme.danger)
+                    Text("METAL UNAVAILABLE")
+                        .font(Theme.label(12))
+                        .tracking(1.4)
+                        .foregroundColor(Theme.text)
                 }
-                .foregroundStyle(.white)
             }
         }
         .onAppear { app.start() }
         .onDisappear { app.stop() }
     }
 
+    // MARK: - Status bar
+
     private var statusBar: some View {
-        HStack(spacing: 10) {
-            Label(camera.running ? "LIVE" : "WAITING",
-                  systemImage: camera.running ? "video.fill" : "video.slash")
-                .foregroundStyle(camera.running ? .green : .orange)
+        HStack(spacing: Theme.sp3) {
+            Circle()
+                .fill(camera.running ? Theme.success : Theme.warning)
+                .frame(width: 7, height: 7)
+
             VStack(alignment: .leading, spacing: 1) {
+                Text(camera.running ? "LIVE" : "WAITING")
+                    .font(Theme.label(11))
+                    .tracking(1.4)
+                    .foregroundColor(Theme.text)
                 Text(camera.formatText)
-                    .lineLimit(1)
-                Text("target 60  /  actual \(camera.measuredFPS) fps")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.65))
+                    .font(Theme.value(9))
+                    .foregroundColor(Theme.textTertiary)
             }
+
             Text(Bundle.main.buildStamp)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.55))
-                .accessibilityLabel("Build number")
-            Spacer()
-            Label(motion.locked ? "LOCKED" : "IMU…", systemImage: "gyroscope")
-                .foregroundStyle(motion.available ? .green : .orange)
+                .font(Theme.value(9))
+                .foregroundColor(Theme.textTertiary)
+
+            Spacer(minLength: Theme.sp2)
+
+            Label(motion.locked ? "LOCKED" : "NO IMU", systemImage: "gyroscope")
+                .font(Theme.label(10))
+                .tracking(0.8)
+                .foregroundColor(motion.available ? Theme.success : Theme.warning)
+
             Button { motion.recenter() } label: {
                 Image(systemName: "scope")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.text)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
-            Button { showControls = true } label: {
+            .buttonStyle(.plain)
+            .accessibilityLabel("Recenter lock")
+
+            Button { withAnimation(.easeOut(duration: 0.2)) { showControls.toggle() } } label: {
                 Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(showControls ? Theme.onAccent : Theme.text)
+                    .frame(width: 32, height: 32)
+                    .background(showControls ? Theme.accent : Theme.surface2,
+                                in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Open camera settings")
+            .buttonStyle(.plain)
+            .accessibilityLabel("Toggle control panel")
         }
-        .font(.caption.bold())
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(.black.opacity(0.55), in: Capsule())
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
+        .padding(.horizontal, Theme.sp3)
+        .padding(.vertical, Theme.sp2)
+        .background(Theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.rLg))
+        .padding(.horizontal, Theme.sp3)
+        .padding(.top, Theme.sp2)
     }
+
+    // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        HStack(spacing: 12) {
-            Text("FOV \(Int(settings.outputFov))°")
-            Text("•")
-                .foregroundStyle(.white.opacity(0.4))
-            Text(motion.mode.title)
-            Spacer()
-            Text("Pinch to zoom")
-                .foregroundStyle(.white.opacity(0.6))
+        HStack(spacing: Theme.sp4) {
+            metric("fov", "\(Int(settings.outputFov))°")
+            metric("mode", motion.mode.title.lowercased())
+            metric("rate", "\(camera.measuredFPS) fps")
+            Spacer(minLength: 0)
+            Text("PINCH TO ZOOM")
+                .font(Theme.label(8))
+                .tracking(1.0)
+                .foregroundColor(Theme.textDisabled)
         }
-        .font(.caption2.monospaced())
-        .foregroundStyle(.white.opacity(0.85))
-        .padding(.horizontal, 13)
-        .padding(.vertical, 9)
-        .background(.black.opacity(0.55), in: Capsule())
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
+        .padding(.horizontal, Theme.sp3)
+        .padding(.vertical, Theme.sp2)
+        .background(Theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.rLg))
+        .padding(.horizontal, Theme.sp3)
+        .padding(.bottom, Theme.sp2)
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        HStack(spacing: Theme.sp1) {
+            Text(label.uppercased())
+                .font(Theme.label(8))
+                .tracking(1.0)
+                .foregroundColor(Theme.textTertiary)
+            Text(value)
+                .font(Theme.value(11))
+                .foregroundColor(Theme.text)
+        }
     }
 }
 
-private struct FloatingControls: View {
-    @ObservedObject var settings: FisheyeSettings
-    @ObservedObject var motion: MotionStabilizer
-    @ObservedObject var camera: CameraService
-    let dismiss: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Stabilization", selection: Binding(
-                        get: { motion.mode },
-                        set: { motion.setMode($0) }
-                    )) {
-                        ForEach(MotionStabilizer.Mode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    Text("60 FPS target · \(camera.measuredFPS) FPS measured")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Camera lens", selection: Binding(
-                        get: { camera.lens },
-                        set: { camera.setLens($0) }
-                    )) {
-                        ForEach(CameraService.Lens.allCases) { lens in
-                            Text(lens.title).tag(lens)
-                        }
-                    }
-                } header: {
-                    Text("Camera")
-                }
-
-                Section {
-                    slider("Output FOV", value: $settings.outputFov, range: 30...130, suffix: "°")
-                    slider("Lens half FOV", value: $settings.lensHalfFov, range: 60...120, suffix: "°")
-                    slider("Circle scale", value: $settings.circleScale, range: 0.70...1.15, suffix: "x")
-                    Picker("Projection", selection: $settings.projection) {
-                        ForEach(FisheyeProjection.allCases) { projection in
-                            Text(projection.title).tag(projection)
-                        }
-                    }
-                } header: {
-                    Text("Lens geometry")
-                } footer: {
-                    Text("Start with the lens half FOV and circle scale. Use a straight door frame or table edge as the reference.")
-                }
-
-                Section {
-                    slider("Radial k1", value: $settings.k1, range: -0.35...0.35, suffix: "")
-                    slider("Radial k2", value: $settings.k2, range: -0.20...0.20, suffix: "")
-                    slider("Center X", value: $settings.centerX, range: -0.12...0.12, suffix: "")
-                    slider("Center Y", value: $settings.centerY, range: -0.12...0.12, suffix: "")
-                    slider("Edge feather", value: $settings.edgeFeather, range: 0...0.12, suffix: "")
-                    Button("Reset lens calibration", role: .destructive) {
-                        settings.resetLens()
-                    }
-                } header: {
-                    Text("Manual calibration")
-                } footer: {
-                    Text("Adjust k1/k2 until straight lines become straight. Center X/Y correct a clip-on lens that is not perfectly centered.")
-                }
-
-                Section {
-                    slider("Sharpness", value: $settings.sharpness, range: 0...0.6, suffix: "")
-                    slider("Local contrast", value: $settings.localContrast, range: 0...0.5, suffix: "")
-                    slider("Haze / dirty lens", value: $settings.hazeCompensation, range: 0...0.5, suffix: "")
-                } header: {
-                    Text("Image finish")
-                } footer: {
-                    Text("Use small values. These controls improve perceived clarity but cannot restore detail lost by blur, low light, or dirty glass.")
-                }
-
-                Section {
-                    slider("Sensor smoothing", value: Binding(
-                        get: { Float(motion.smoothing) },
-                        set: { motion.smoothing = Double($0) }
-                    ), range: 0...0.30, suffix: "s")
-                    slider("Display smoothing", value: Binding(
-                        get: { Float(motion.displaySmoothing) },
-                        set: { motion.displaySmoothing = Double($0) }
-                    ), range: 0...0.18, suffix: "s")
-                    if motion.mode == .follow {
-                        slider("Follow time", value: Binding(
-                            get: { Float(motion.dampingTime) },
-                            set: { motion.dampingTime = Double($0) }
-                        ), range: 0.2...3.0, suffix: "s")
-                    }
-                    Button("Recenter / lock current direction") {
-                        motion.recenter()
-                    }
-                } header: {
-                    Text("Stabilization")
-                } footer: {
-                    Text("More smoothing is steadier but adds delay. Display smoothing removes tiny sample-to-display timing jumps.")
-                }
-            }
-            .navigationTitle("CONTROL")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Close", action: dismiss)
-                }
-            }
-            .frame(maxHeight: 460)
-            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 6))
-        }
-    }
-
-    private func slider(_ title: String,
-                        value: Binding<Float>,
-                        range: ClosedRange<Float>,
-                        suffix: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(String(format: "%.3f", value.wrappedValue) + suffix)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Slider(value: value, in: range)
-        }
-        .padding(.vertical, 2)
-    }
-}
+// MARK: - Metal preview host
 
 private struct MetalPreview: UIViewRepresentable {
     let camera: CameraService
@@ -314,9 +227,11 @@ private struct MetalPreview: UIViewRepresentable {
     }
 }
 
+// MARK: - Build marker
+
 extension Bundle {
-    /// Short build marker shown in the status bar, so the running install can
-    /// be identified without guessing which IPA is on the device.
+    /// Short build marker so the running install can be identified on-device
+    /// without guessing which IPA was sideloaded.
     var buildStamp: String {
         let version = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let build = infoDictionary?["CFBundleVersion"] as? String ?? "?"

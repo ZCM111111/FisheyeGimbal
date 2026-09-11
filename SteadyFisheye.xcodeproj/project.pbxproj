@@ -14,6 +14,9 @@
         B10000000000000000000005 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* MetalRenderer.swift */; };
         B10000000000000000000006 /* MotionStabilizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* MotionStabilizer.swift */; };
         B10000000000000000000007 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* Shaders.metal */; };
+        B20000000000000000000001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* Theme.swift */; };
+        B20000000000000000000002 /* PanelComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* PanelComponents.swift */; };
+        B20000000000000000000003 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* ControlPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +29,9 @@
         A10000000000000000000007 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
         A10000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
         A10000000000000000000009 /* SteadyFisheye.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SteadyFisheye.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        A20000000000000000000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+        A20000000000000000000002 /* PanelComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelComponents.swift; sourceTree = "<group>"; };
+        A20000000000000000000003 /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -64,6 +70,9 @@
                 A10000000000000000000004 /* FisheyeSettings.swift */,
                 A10000000000000000000005 /* MetalRenderer.swift */,
                 A10000000000000000000006 /* MotionStabilizer.swift */,
+                A20000000000000000000001 /* Theme.swift */,
+                A20000000000000000000002 /* PanelComponents.swift */,
+                A20000000000000000000003 /* ControlPanel.swift */,
                 A10000000000000000000007 /* Shaders.metal */,
                 A10000000000000000000008 /* Info.plist */,
             );
@@ -144,6 +153,9 @@
                 B10000000000000000000004 /* FisheyeSettings.swift in Sources */,
                 B10000000000000000000005 /* MetalRenderer.swift in Sources */,
                 B10000000000000000000006 /* MotionStabilizer.swift in Sources */,
+                B20000000000000000000001 /* Theme.swift in Sources */,
+                B20000000000000000000002 /* PanelComponents.swift in Sources */,
+                B20000000000000000000003 /* ControlPanel.swift in Sources */,
                 B10000000000000000000007 /* Shaders.metal in Sources */,
             );
             runOnlyForDeploymentPostprocessing = 0;
