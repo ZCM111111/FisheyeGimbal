@@ -18,7 +18,7 @@ struct Segmented<T: Hashable>: View {
                     selection = value
                 } label: {
                     Text(index < titles.count ? titles[index] : "")
-                        .font(Theme.value(11))
+                        .font(Theme.label(12))
                         .foregroundColor(isActive ? Theme.onAccent : Theme.textSecondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
@@ -61,8 +61,8 @@ struct IndustrialSlider: View {
         VStack(alignment: .leading, spacing: Theme.sp1) {
             HStack(spacing: Theme.sp2) {
                 Text(title.uppercased())
-                    .font(Theme.label())
-                    .tracking(0.8)
+                    .font(Theme.label(11))
+                    .tracking(0.3)
                     .foregroundColor(Theme.textSecondary)
                 Spacer(minLength: Theme.sp2)
                 Text(readout)
@@ -135,8 +135,8 @@ struct PanelSection<Content: View>: View {
                         .foregroundColor(expanded ? Theme.accent : Theme.textTertiary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                     Text(title.uppercased())
-                        .font(Theme.label(10))
-                        .tracking(1.2)
+                        .font(Theme.label(11))
+                        .tracking(0.5)
                         .foregroundColor(Theme.textTertiary)
                     Spacer(minLength: 0)
                 }
@@ -164,8 +164,8 @@ struct ReadoutRow: View {
     var body: some View {
         HStack(spacing: Theme.sp2) {
             Text(label.uppercased())
-                .font(Theme.label(9))
-                .tracking(0.8)
+                .font(Theme.label(10))
+                .tracking(0.3)
                 .foregroundColor(Theme.textTertiary)
                 .lineLimit(1)
                 .fixedSize()
@@ -190,8 +190,8 @@ struct ChipToggle: View {
             isOn.toggle()
         } label: {
             Text(title.uppercased())
-                .font(Theme.label(10))
-                .tracking(0.8)
+                .font(Theme.label(11))
+                .tracking(0.3)
                 .foregroundColor(isOn ? Theme.onAccent : Theme.textSecondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 26)
@@ -219,8 +219,8 @@ struct PanelButton: View {
                         .foregroundColor(Theme.danger)
                 }
                 Text(title.uppercased())
-                    .font(Theme.label(10))
-                    .tracking(0.8)
+                    .font(Theme.label(11))
+                    .tracking(0.3)
                     .foregroundColor(Theme.textSecondary)
             }
             .frame(maxWidth: .infinity)

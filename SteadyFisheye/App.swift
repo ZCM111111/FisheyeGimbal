@@ -35,7 +35,7 @@ final class CameraApp: ObservableObject {
             if granted {
                 self.camera.start()
             } else {
-                self.camera.setError("Camera permission was denied. Enable it in Settings.")
+                self.camera.setError("相机权限被拒绝，请到「设置」中开启。")
             }
         }
     }

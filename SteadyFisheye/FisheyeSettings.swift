@@ -8,8 +8,8 @@ enum FisheyeProjection: Int, CaseIterable, Identifiable {
     var id: Int { rawValue }
     var title: String {
         switch self {
-        case .equidistant: return "Equidistant"
-        case .equisolid: return "Equisolid"
+        case .equidistant: return "等距投影"
+        case .equisolid: return "等立体角"
         }
     }
 }

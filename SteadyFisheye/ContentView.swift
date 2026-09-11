@@ -79,9 +79,9 @@ struct ContentView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.title)
                         .foregroundColor(Theme.danger)
-                    Text("METAL UNAVAILABLE")
-                        .font(Theme.label(12))
-                        .tracking(1.4)
+                    Text("图形渲染不可用")
+                        .font(Theme.label(13))
+                        .tracking(0.5)
                         .foregroundColor(Theme.text)
                 }
             }
@@ -98,9 +98,9 @@ struct ContentView: View {
                 .fill(camera.running ? Theme.success : Theme.warning)
                 .frame(width: 7, height: 7)
 
-            Text(camera.running ? "LIVE" : "WAIT")
-                .font(Theme.label(11))
-                .tracking(1.2)
+            Text(camera.running ? "实时" : "等待")
+                .font(Theme.label(12))
+                .tracking(0.5)
                 .foregroundColor(Theme.text)
                 .lineLimit(1)
                 .fixedSize()
@@ -124,7 +124,7 @@ struct ContentView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(motion.available ? Theme.success : Theme.warning)
                 .frame(width: 16)
-                .accessibilityLabel(motion.locked ? "Locked" : "No motion data")
+                .accessibilityLabel(motion.locked ? "已锁定" : "无陀螺仪数据")
 
             if motion.mode == .horizon {
                 // Gravity keeps the horizon level on its own, so there is no
@@ -133,7 +133,7 @@ struct ContentView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(abs(motion.horizonTilt) < 0.5 ? Theme.success : Theme.accent)
                     .frame(width: 32, height: 32)
-                    .accessibilityLabel("Horizon locked to gravity")
+                    .accessibilityLabel("地平线已锁定到重力")
             } else {
                 Button { motion.recenter() } label: {
                     Image(systemName: "scope")
@@ -143,7 +143,7 @@ struct ContentView: View {
                         .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Recenter lock")
+                .accessibilityLabel("重新回中")
             }
 
             Button { withAnimation(.easeOut(duration: 0.2)) { showControls.toggle() } } label: {
@@ -155,7 +155,7 @@ struct ContentView: View {
                                 in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Toggle control panel")
+            .accessibilityLabel("开关控制面板")
         }
         .lineLimit(1)
         .padding(.horizontal, Theme.sp3)
@@ -169,12 +169,12 @@ struct ContentView: View {
 
     private var bottomBar: some View {
         HStack(spacing: Theme.sp4) {
-            metric("fov", "\(Int(settings.outputFov))°")
-            metric("mode", motion.mode.title)
+            metric("视场", "\(Int(settings.outputFov))°")
+            metric("模式", motion.mode.title)
             if motion.mode == .horizon {
-                metric("tilt", String(format: "%+.1f°", Double(motion.horizonTilt)))
+                metric("倾斜", String(format: "%+.1f°", Double(motion.horizonTilt)))
             }
-            metric("rate", "\(camera.measuredFPS) fps")
+            metric("帧率", "\(camera.measuredFPS) 帧")
             Spacer(minLength: 0)
         }
         .lineLimit(1)
@@ -188,8 +188,8 @@ struct ContentView: View {
     private func metric(_ label: String, _ value: String) -> some View {
         HStack(spacing: Theme.sp1) {
             Text(label.uppercased())
-                .font(Theme.label(8))
-                .tracking(1.0)
+                .font(Theme.label(10))
+                .tracking(0.3)
                 .foregroundColor(Theme.textTertiary)
             Text(value)
                 .font(Theme.value(11))

@@ -12,8 +12,8 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .wide: return "1x"
-            case .ultraWide: return "0.5x"
+            case .wide: return "1x 主摄"
+            case .ultraWide: return "0.5x 超广角"
             }
         }
 
@@ -29,7 +29,7 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     @Published private(set) var running = false
     @Published private(set) var lens: Lens = .ultraWide
-    @Published private(set) var formatText = "No camera"
+    @Published private(set) var formatText = "无摄像头"
     @Published private(set) var activeFPS = 60
     @Published private(set) var measuredFPS = 0
     @Published private(set) var error: String?
@@ -64,7 +64,7 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         sessionQueue.async { [weak self] in
             guard let self else { return }
             guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
-                self.setError("Camera permission is not granted")
+                self.setError("未获得相机权限")
                 return
             }
             if !self.configured {
@@ -123,14 +123,14 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         guard let device = discovery.devices.first(where: { $0.deviceType == selectedLens.deviceType })
                 ?? discovery.devices.first
                 ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            finishConfiguration(with: "No rear camera was found")
+            finishConfiguration(with: "未找到后置摄像头")
             return
         }
 
         do {
             let input = try AVCaptureDeviceInput(device: device)
             guard session.canAddInput(input) else {
-                finishConfiguration(with: "The camera input could not be added")
+                finishConfiguration(with: "无法添加相机输入")
                 return
             }
             session.addInput(input)
@@ -153,14 +153,14 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             }
             guard supports60 else {
                 device.unlockForConfiguration()
-                finishConfiguration(with: "This camera does not provide 60 FPS")
+                finishConfiguration(with: "该摄像头不支持 60 帧")
                 return
             }
             device.activeVideoMinFrameDuration = targetDuration
             device.activeVideoMaxFrameDuration = targetDuration
             device.unlockForConfiguration()
         } catch {
-            finishConfiguration(with: "Camera setup failed: \(error.localizedDescription)")
+            finishConfiguration(with: "相机初始化失败：\(error.localizedDescription)")
             return
         }
 
@@ -173,13 +173,13 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             kCVPixelFormatType_32BGRA
         ]
         guard let pixelFormat = preferred.first(where: supported.contains) else {
-            finishConfiguration(with: "The camera returned no supported pixel format")
+            finishConfiguration(with: "相机未返回受支持的像素格式")
             return
         }
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
         guard session.canAddOutput(videoOutput) else {
-            finishConfiguration(with: "The video output could not be added")
+            finishConfiguration(with: "无法添加视频输出")
             return
         }
         session.addOutput(videoOutput)

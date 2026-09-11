@@ -58,7 +58,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var lastHUDTime: Double = 0
 
     @Published private(set) var inputSize = CGSize.zero
-    @Published private(set) var cameraFPSText = "camera --"
+    @Published private(set) var cameraFPSText = "相机 --"
 
     enum RendererError: Error {
         case noMetal
@@ -292,7 +292,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.inputSize = sourceSize
-            self.cameraFPSText = "camera \(fps) fps"
+            self.cameraFPSText = "相机 \(fps) 帧"
         }
     }
 }

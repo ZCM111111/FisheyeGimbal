@@ -45,9 +45,9 @@ struct ControlPanel: View {
 
     private var header: some View {
         HStack(spacing: Theme.sp3) {
-            Text("CONTROL")
-                .font(Theme.label(12))
-                .tracking(2.0)
+            Text("控制台")
+                .font(Theme.label(13))
+                .tracking(1.0)
                 .foregroundColor(Theme.text)
 
             Spacer(minLength: Theme.sp2)
@@ -64,7 +64,7 @@ struct ControlPanel: View {
                     .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close control panel")
+            .accessibilityLabel("关闭控制面板")
         }
         .padding(.horizontal, Theme.sp4)
         .padding(.vertical, Theme.sp3)
@@ -80,19 +80,19 @@ struct ControlPanel: View {
 
     private var telemetry: some View {
         VStack(alignment: .leading, spacing: Theme.sp2) {
-            ReadoutRow(label: "source", value: camera.formatText)
-            ReadoutRow(label: "rate",
-                       value: "\(camera.measuredFPS) / 60 fps",
+            ReadoutRow(label: "信号源", value: camera.formatText)
+            ReadoutRow(label: "帧率",
+                       value: "\(camera.measuredFPS) / 60 帧",
                        valueColor: camera.measuredFPS >= 55 ? Theme.success : Theme.warning)
-            ReadoutRow(label: "lens", value: camera.lens.title)
-            ReadoutRow(label: "lock",
-                       value: motion.locked ? "locked" : "no imu",
+            ReadoutRow(label: "镜头", value: camera.lens.title)
+            ReadoutRow(label: "锁定",
+                       value: motion.locked ? "已锁定" : "无陀螺仪",
                        valueColor: motion.available ? Theme.success : Theme.danger)
             if motion.mode == .horizon {
                 // Live gravity reference: this keeps updating even while the
                 // phone is held still, and it is never latched by a button.
-                ReadoutRow(label: "tilt",
-                           value: String(format: "%+.1f°  live", Double(motion.horizonTilt)),
+                ReadoutRow(label: "倾斜",
+                           value: String(format: "%+.1f°  实时", Double(motion.horizonTilt)),
                            valueColor: abs(motion.horizonTilt) < 0.5 ? Theme.success : Theme.accent)
             }
         }
@@ -104,7 +104,7 @@ struct ControlPanel: View {
 
     private var cameraGroup: some View {
         VStack(alignment: .leading, spacing: Theme.sp3) {
-            groupTitle("camera")
+            groupTitle("相机")
 
             Segmented(values: CameraService.Lens.allCases,
                       titles: CameraService.Lens.allCases.map { $0.title },
@@ -121,13 +121,13 @@ struct ControlPanel: View {
     }
 
     private var geometryGroup: some View {
-        PanelSection(title: "lens geometry", expanded: $showGeometry) {
+        PanelSection(title: "镜头几何", expanded: $showGeometry) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
-                IndustrialSlider(title: "output fov", unit: "°", digits: 0,
+                IndustrialSlider(title: "输出视场", unit: "°", digits: 0,
                                  value: $settings.outputFov, range: 30...130)
-                IndustrialSlider(title: "lens half fov", unit: "°", digits: 0,
+                IndustrialSlider(title: "镜头半视场", unit: "°", digits: 0,
                                  value: $settings.lensHalfFov, range: 60...120)
-                IndustrialSlider(title: "circle scale", unit: "x", digits: 2,
+                IndustrialSlider(title: "成像圈比例", unit: "×", digits: 2,
                                  value: $settings.circleScale, range: 0.70...1.15)
 
                 Segmented(values: FisheyeProjection.allCases,
@@ -138,40 +138,40 @@ struct ControlPanel: View {
                 // mapping decides whether the fisheye circle is cropped to
                 // fill the screen or fitted inside it.
                 Segmented(values: [true, false],
-                          titles: ["fill screen", "fit view"],
+                          titles: ["铺满屏幕", "完整视野"],
                           selection: $settings.fillScreen)
             }
         }
     }
 
     private var finishGroup: some View {
-        PanelSection(title: "image finish", expanded: $showFinish) {
+        PanelSection(title: "画质", expanded: $showFinish) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
-                IndustrialSlider(title: "sharpness", unit: "", digits: 2,
+                IndustrialSlider(title: "锐度", unit: "", digits: 2,
                                  value: $settings.sharpness, range: 0...0.6)
-                IndustrialSlider(title: "local contrast", unit: "", digits: 2,
+                IndustrialSlider(title: "局部对比", unit: "", digits: 2,
                                  value: $settings.localContrast, range: 0...0.5)
-                IndustrialSlider(title: "haze / dirty lens", unit: "", digits: 2,
+                IndustrialSlider(title: "雾化 / 镜头脏污", unit: "", digits: 2,
                                  value: $settings.hazeCompensation, range: 0...0.5)
             }
         }
     }
 
     private var calibrationGroup: some View {
-        PanelSection(title: "manual calibration", expanded: $showCalibration) {
+        PanelSection(title: "手动标定", expanded: $showCalibration) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
-                IndustrialSlider(title: "radial k1", unit: "", digits: 3,
+                IndustrialSlider(title: "径向 K1", unit: "", digits: 3,
                                  value: $settings.k1, range: -0.35...0.35)
-                IndustrialSlider(title: "radial k2", unit: "", digits: 3,
+                IndustrialSlider(title: "径向 K2", unit: "", digits: 3,
                                  value: $settings.k2, range: -0.20...0.20)
-                IndustrialSlider(title: "center x", unit: "", digits: 3,
+                IndustrialSlider(title: "中心 X", unit: "", digits: 3,
                                  value: $settings.centerX, range: -0.12...0.12)
-                IndustrialSlider(title: "center y", unit: "", digits: 3,
+                IndustrialSlider(title: "中心 Y", unit: "", digits: 3,
                                  value: $settings.centerY, range: -0.12...0.12)
-                IndustrialSlider(title: "edge feather", unit: "", digits: 3,
+                IndustrialSlider(title: "边缘羽化", unit: "", digits: 3,
                                  value: $settings.edgeFeather, range: 0...0.12)
 
-                PanelButton(title: "reset lens", isDestructive: true) {
+                PanelButton(title: "重置镜头", isDestructive: true) {
                     settings.resetLens()
                 }
             }
@@ -179,10 +179,10 @@ struct ControlPanel: View {
     }
 
     private var stabilizationGroup: some View {
-        PanelSection(title: "stabilization", expanded: $showStabilization) {
+        PanelSection(title: "防抖", expanded: $showStabilization) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
                 if motion.mode == .follow {
-                    IndustrialSlider(title: "follow time", unit: "s", digits: 2,
+                    IndustrialSlider(title: "跟随时间", unit: "秒", digits: 2,
                                      value: Binding(get: { Float(motion.dampingTime) },
                                                     set: { motion.dampingTime = Double($0) }),
                                      range: 0.2...3.0)
@@ -190,19 +190,19 @@ struct ControlPanel: View {
 
                 // Any value above zero deliberately leaves part of the shake
                 // uncorrected, so the default is a hard zero.
-                IndustrialSlider(title: "lock lag", unit: "s", digits: 2,
+                IndustrialSlider(title: "锁定延迟", unit: "秒", digits: 2,
                                  value: Binding(get: { Float(motion.displaySmoothing) },
                                                 set: { motion.displaySmoothing = Double($0) }),
                                  range: 0...0.18)
 
                 if motion.mode == .horizon {
-                    Text("HORIZON IS REFERENCED TO GRAVITY CONTINUOUSLY — NOTHING TO PRESS")
-                        .font(Theme.label(8))
-                        .tracking(0.6)
+                    Text("地平线持续参考重力，无需手动校准")
+                        .font(Theme.label(10))
+                        .tracking(0.3)
                         .foregroundColor(Theme.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    PanelButton(title: "recenter") {
+                    PanelButton(title: "重新回中") {
                         motion.recenter()
                     }
                 }
@@ -212,8 +212,8 @@ struct ControlPanel: View {
 
     private func groupTitle(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(Theme.label(10))
-            .tracking(1.2)
+            .font(Theme.label(11))
+            .tracking(0.5)
             .foregroundColor(Theme.textTertiary)
     }
 }

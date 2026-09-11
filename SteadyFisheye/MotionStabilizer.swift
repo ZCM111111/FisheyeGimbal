@@ -30,9 +30,9 @@ final class MotionStabilizer: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .hold: return "Hold"
-            case .follow: return "Follow"
-            case .horizon: return "Horizon"
+            case .hold: return "锁定"
+            case .follow: return "跟随"
+            case .horizon: return "地平线"
             }
         }
     }
@@ -40,7 +40,7 @@ final class MotionStabilizer: ObservableObject {
     @Published private(set) var available = false
     @Published private(set) var locked = false
     @Published private(set) var mode: Mode = .hold
-    @Published private(set) var status = "Waiting for motion"
+    @Published private(set) var status = "等待陀螺仪"
     /// How far the phone is rolled away from level, in degrees. Derived from
     /// gravity continuously, never latched from a button, so it is always the
     /// live reference rather than a stale snapshot.
@@ -205,12 +205,12 @@ final class MotionStabilizer: ObservableObject {
 
     func start() {
         guard manager.isDeviceMotionAvailable else {
-            publishAvailability(false, status: "Device motion unavailable")
+            publishAvailability(false, status: "设备不支持陀螺仪数据")
             return
         }
 
         manager.deviceMotionUpdateInterval = 1.0 / 120.0
-        publishAvailability(true, status: "Starting motion")
+        publishAvailability(true, status: "正在启动陀螺仪")
         manager.startDeviceMotionUpdates(using: .xArbitraryZVertical,
                                          to: motionQueue) { [weak self] motion, error in
             guard let self else { return }
@@ -242,7 +242,7 @@ final class MotionStabilizer: ObservableObject {
         hasSample = false
         lastTimestamp = 0
         lock.unlock()
-        publishAvailability(false, status: "Motion stopped")
+        publishAvailability(false, status: "陀螺仪已停止")
     }
 
     func recenter() {
@@ -393,7 +393,7 @@ final class MotionStabilizer: ObservableObject {
         if shouldPublishActive {
             DispatchQueue.main.async { [weak self] in
                 self?.locked = true
-                self?.status = "Motion active"
+                self?.status = "陀螺仪工作中"
             }
         }
     }

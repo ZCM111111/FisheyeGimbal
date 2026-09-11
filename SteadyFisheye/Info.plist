@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>zh_CN</string>
     <key>CFBundleDisplayName</key>
-    <string>SteadyFisheye</string>
+    <string>鱼眼防抖</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -23,9 +23,9 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCameraUsageDescription</key>
-    <string>SteadyFisheye needs the camera for the live corrected preview.</string>
+    <string>需要使用相机来实时显示去畸变后的画面。</string>
     <key>NSMotionUsageDescription</key>
-    <string>SteadyFisheye uses device motion to keep the view pointed at the locked direction.</string>
+    <string>需要使用陀螺仪与重力感应来锁定拍摄方向、保持地平线水平。</string>
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>
