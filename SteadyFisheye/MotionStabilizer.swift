@@ -276,15 +276,16 @@ final class MotionStabilizer: ObservableObject {
 
         // qCurrent^-1 * qLocked maps a ray in the locked device frame into
         // the current device frame. The basis conversion wraps camera pixels.
-        let relativeDevice = simd_float3x3(filtered.inverse * lockedQuaternion)
+        let relativeDeviceQuaternion = filtered.inverse * lockedQuaternion
+        let relativeDevice = simd_float3x3(relativeDeviceQuaternion)
         let relativeCamera = cameraToDevice * relativeDevice * cameraToDevice
         latest.cameraFromLocked = relativeCamera
-        latest.relativeDeviceQuaternion = relativeDevice
+        latest.relativeDeviceQuaternion = relativeDeviceQuaternion
         latest.lockVersion = lockVersion
         latest.timestamp = timestamp
         latest.valid = true
         samples.append(MotionSample(timestamp: timestamp,
-                                    quaternion: relativeDevice,
+                                    quaternion: relativeDeviceQuaternion,
                                     lockVersion: lockVersion))
         if samples.count > maxSampleCount {
             samples.removeFirst(samples.count - maxSampleCount)

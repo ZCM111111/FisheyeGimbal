@@ -55,7 +55,6 @@ struct ContentView: View {
                           dismiss: { showControls = false })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(.ultraThinMaterial)
         }
         .onAppear { app.start() }
         .onDisappear { app.stop() }
