@@ -40,7 +40,11 @@ enum ScreenDetector {
 
     private enum LoadState {
         case untried
-        case ready(VNCoreMLRequest)
+        /// The request, plus the square side the model takes: the input size is
+        /// needed to map a decoded box back onto the frame, and it comes from
+        /// the MLModel's own description, which is why the model is kept here
+        /// rather than asked of the Vision wrapper.
+        case ready(VNCoreMLRequest, Int)
         case unavailable
     }
 
@@ -49,37 +53,51 @@ enum ScreenDetector {
     private static let context = CIContext()
 
     /// True when a usable model is in the bundle. Loads it on first use.
-    static var isAvailable: Bool { request() != nil }
+    static var isAvailable: Bool { loaded() != nil }
 
-    private static func request() -> VNCoreMLRequest? {
+    private static func loaded() -> (request: VNCoreMLRequest, inputSide: Int)? {
         stateLock.lock()
         defer { stateLock.unlock() }
         switch state {
-        case .ready(let request):
-            return request
+        case .ready(let request, let side):
+            return (request, side)
         case .unavailable:
             return nil
         case .untried:
-            // Xcode compiles the .mlpackage in the resources phase, so the
-            // bundle holds the compiled .mlmodelc under the model's name.
+            // The Codemagic build compiles the .mlpackage and copies the result
+            // in as ScreenDetector.mlmodelc, so the bundle holds a compiled model
+            // under this name — or nothing at all, which is a supported state.
             guard let url = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc"),
                   let model = try? MLModel(contentsOf: url),
-                  let visionModel = try? VNCoreMLModel(for: model) else {
+                  let visionModel = try? VNCoreMLModel(for: model),
+                  let side = inputSide(of: model) else {
                 state = .unavailable
                 return nil
             }
             let request = VNCoreMLRequest(model: visionModel)
             // The model was trained on square, centre-cropped frames.
             request.imageCropAndScaleOption = .centerCrop
-            state = .ready(request)
-            return request
+            state = .ready(request, side)
+            return (request, side)
         }
+    }
+
+    /// The square side the model takes, read from its own description. A model
+    /// without one is unusable here: without the input size a decoded box cannot
+    /// be placed back on the frame.
+    private static func inputSide(of model: MLModel) -> Int? {
+        for description in model.modelDescription.inputDescriptionsByName.values {
+            if let constraint = description.imageConstraint, constraint.pixelsWide > 0 {
+                return constraint.pixelsWide
+            }
+        }
+        return nil
     }
 
     /// Runs the model on one frame. Pure work over a local image, so it is safe
     /// to call off the main thread.
     static func detect(in image: CGImage) -> Detection? {
-        guard let request = request() else { return nil }
+        guard let (request, modelSide) = loaded() else { return nil }
 
         // The capture connection already delivers portrait buffers, which is the
         // orientation the model was trained on. A landscape buffer would reach
@@ -97,7 +115,6 @@ enum ScreenDetector {
         }
 
         guard let array = firstMultiArray(in: request.results),
-              let modelSide = inputSide(of: request),
               let best = bestBox(in: array, inputSide: CGFloat(modelSide)) else {
             return nil
         }
@@ -111,7 +128,7 @@ enum ScreenDetector {
 
         var center = CGPoint(x: originX + best.box.midX * scale,
                              y: originY + best.box.midY * scale)
-        var radius = (best.box.width + best.box.height) * 0.25 * scale
+        let radius = (best.box.width + best.box.height) * 0.25 * scale
 
         if landscape {
             center = uprightInverse(center, uprightSize: CGSize(width: width, height: height))
@@ -128,15 +145,6 @@ enum ScreenDetector {
             if let feature = observation as? VNCoreMLFeatureValueObservation,
                let array = feature.featureValue.multiArrayValue {
                 return array
-            }
-        }
-        return nil
-    }
-
-    private static func inputSide(of request: VNCoreMLRequest) -> Int? {
-        for description in request.model.modelDescription.inputDescriptionsByName.values {
-            if let constraint = description.imageConstraint, constraint.pixelsWide > 0 {
-                return constraint.pixelsWide
             }
         }
         return nil
