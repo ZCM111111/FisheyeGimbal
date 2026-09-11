@@ -85,6 +85,14 @@ struct ControlPanel: View {
                        value: "\(camera.measuredFPS) / 60 帧",
                        valueColor: camera.measuredFPS >= 55 ? Theme.success : Theme.warning)
             ReadoutRow(label: "镜头", value: camera.lens.title)
+            // Calibration gauge: below 100% there is still unused picture
+            // hidden by the crop, above 100% the model is sampling past the
+            // real image circle and black corners appear.
+            ReadoutRow(label: "覆盖",
+                       value: String(format: "%.0f%%", Double(camera.lensCoverage)),
+                       valueColor: camera.lensCoverage > 100
+                           ? Theme.danger
+                           : (camera.lensCoverage > 88 ? Theme.success : Theme.accent))
             ReadoutRow(label: "锁定",
                        value: motion.locked ? "已锁定" : "无陀螺仪",
                        valueColor: motion.available ? Theme.success : Theme.danger)

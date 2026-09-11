@@ -30,6 +30,15 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     @Published private(set) var running = false
     @Published private(set) var lens: Lens = .ultraWide
     @Published private(set) var formatText = "无摄像头"
+    /// Percentage of the lens image circle that the corners of the preview
+    /// reach. Reported by the renderer so the calibration panel can show the
+    /// same number the GPU shader is using.
+    @Published private(set) var lensCoverage: Float = 0
+
+    /// Called on the main thread by the renderer's HUD update.
+    func reportCoverage(_ percent: Float) {
+        lensCoverage = percent
+    }
     @Published private(set) var activeFPS = 60
     @Published private(set) var measuredFPS = 0
     @Published private(set) var error: String?

@@ -217,6 +217,9 @@ private struct MetalPreview: UIViewRepresentable {
         do {
             let renderer = try MetalRenderer(view: view, settings: settings, motion: motion)
             context.coordinator.renderer = renderer
+            renderer.coverageHandler = { [weak camera] percent in
+                camera?.reportCoverage(percent)
+            }
             camera.onFrame = { [weak renderer] pixelBuffer, timestamp in
                 renderer?.enqueue(pixelBuffer: pixelBuffer, timestamp: timestamp)
             }

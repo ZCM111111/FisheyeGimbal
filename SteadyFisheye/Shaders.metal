@@ -90,19 +90,31 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     uint sourceFormat = uint(max(u.distortion.z, 0.0));
     float localContrast = clamp(u.finishing.x, 0.0, 1.0);
     float hazeCompensation = clamp(u.finishing.y, 0.0, 1.0);
-    // 1 = crop to fill the screen (focal from the long edge)
-    // 0 = fit the widest view (focal from the short edge)
+    // 1 = fill the screen (never leave black), 0 = fit the requested view
     float fillScreen = clamp(u.finishing.z, 0.0, 1.0);
 
     // The output is a pinhole camera in locked-camera coordinates.
-    // A portrait phone screen is far taller than wide, so deriving the focal
-    // from the width would demand a vertical field of view beyond what the
-    // fisheye glass actually covers, leaving the image circle floating in a
-    // black field. Filling from the long edge crops horizontally instead.
+    // A portrait phone screen is far taller than wide, so the field of view is
+    // requested on the short edge and the long edge follows from the aspect.
+    //
+    // Filling takes the wider of two constraints:
+    //   * the view the user asked for, and
+    //   * the widest view whose corner ray still lands inside the lens circle.
+    // A larger focal means a narrower view, so taking the maximum means the
+    // frame is always completely covered: asking for more field of view than
+    // the glass can fill simply stops at the rim instead of painting black
+    // wedges around the image circle.
     float2 pixel = in.uv * viewSize;
-    float reference = mix(viewSize.x, viewSize.y, fillScreen);
-    float focalOut = (reference * 0.5) / max(tan(outputFov * 0.5), 0.001);
-    float2 xy = (pixel - viewSize * 0.5) / focalOut;
+    float2 halfSize = viewSize * 0.5;
+    float requestedFocal = halfSize.x / max(tan(outputFov * 0.5), 0.001);
+    // Stay clear of 90 degrees: tan() explodes there and a fisheye rim maps to
+    // an unbounded rectilinear radius.
+    float cornerTheta = min(maxTheta, 1.36);
+    float cornerFocal = length(halfSize) / max(tan(cornerTheta), 0.001);
+    float focalOut = fillScreen > 0.5
+        ? max(requestedFocal, cornerFocal)
+        : requestedFocal;
+    float2 xy = (pixel - halfSize) / focalOut;
     float3 rayLocked = normalize(float3(xy.x, xy.y, 1.0));
 
     float3x3 cameraFromLocked = float3x3(u.rotation0.xyz,

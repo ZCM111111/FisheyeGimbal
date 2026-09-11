@@ -256,7 +256,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         commandBuffer.commit()
 
         updateHUD(sourceSize: CGSize(width: CGFloat(frame.size.x),
-                                      height: CGFloat(frame.size.y)))
+                                      height: CGFloat(frame.size.y)),
+                  viewSize: drawableSize)
     }
 
     private func makeUniforms(frame: SourceFrame, viewSize: CGSize) -> FEUniforms {
@@ -284,15 +285,43 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         )
     }
 
-    private func updateHUD(sourceSize: CGSize) {
+    /// How much of the lens circle the corners of the screen reach, as a
+    /// percentage. This is the calibration readout: push it toward 100% to use
+    /// the whole picture, and the moment it passes 100% black corners appear
+    /// because the model is sampling past the real image circle.
+    var coverageHandler: ((Float) -> Void)?
+
+    private func updateHUD(sourceSize: CGSize, viewSize: CGSize) {
         let now = CACurrentMediaTime()
         guard now - lastHUDTime > 0.25 else { return }
         lastHUDTime = now
         let fps = Int(cameraFPS.rounded())
+        let coverage = coveragePercent(sourceSize: sourceSize, viewSize: viewSize)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.inputSize = sourceSize
             self.cameraFPSText = "相机 \(fps) 帧"
+            self.coverageHandler?(coverage)
         }
+    }
+
+    /// Mirrors the focal choice in the fragment shader so the panel can show
+    /// the same number the GPU is using.
+    private func coveragePercent(sourceSize: CGSize, viewSize: CGSize) -> Float {
+        let parameters = settings.parameters(sourceSize: sourceSize)
+        guard viewSize.width > 1, viewSize.height > 1 else { return 0 }
+
+        let halfWidth = Float(viewSize.width) * 0.5
+        let halfHeight = Float(viewSize.height) * 0.5
+        let maxTheta = max(parameters.maxTheta, 0.01)
+        let requestedFocal = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
+        let cornerTheta = min(maxTheta, 1.36)
+        let cornerFocal = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
+            / max(tan(cornerTheta), 0.001)
+        let focalOut = settings.fillScreen ? max(requestedFocal, cornerFocal) : requestedFocal
+
+        let cornerRadius = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
+        let thetaCorner = atan(cornerRadius / max(focalOut, 0.001))
+        return min(thetaCorner / maxTheta, 2.0) * 100
     }
 }
