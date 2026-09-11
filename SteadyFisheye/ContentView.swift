@@ -8,9 +8,9 @@ struct ContentView: View {
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
 
-    /// Open on launch: the calibration console is the whole point of the app,
-    /// and hiding it behind an unlabelled icon made it undiscoverable.
-    @State private var showControls = true
+    /// Closed on launch so the preview is unobstructed; the labelled 校正
+    /// button opens the fisheye console.
+    @State private var showControls = false
     @State private var rendererFailed = false
     @State private var baseFov: Float?
     @State private var panelOffset: CGSize = .zero

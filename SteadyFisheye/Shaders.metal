@@ -122,9 +122,6 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
                                          u.rotation2.xyz);
     float3 raySource = normalize(cameraFromLocked * rayLocked);
     float theta = acos(clamp(raySource.z, -1.0, 1.0));
-    if (theta > maxTheta) {
-        return float4(0.0, 0.0, 0.0, 1.0);
-    }
 
     float radial = length(raySource.xy);
     float radius;
@@ -138,15 +135,36 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     radius *= 1.0 + k1 * normalizedRadius * normalizedRadius
                     + k2 * normalizedRadius * normalizedRadius
                           * normalizedRadius * normalizedRadius;
+
+    // Fill mode must never leave black inside the frame. Because a portrait
+    // screen reaches its largest angle at the top and bottom edges, that is
+    // exactly where the ray runs past the real image circle; painting black
+    // there is what produced the black bands above and below the picture.
+    // Pinning the sample to the rim instead extends the outermost pixels, so
+    // the frame always stays completely covered.
+    bool rimExtended = false;
+    if (fillScreen > 0.5) {
+        float rim = maxRadius * 0.995;
+        if (radius > rim) {
+            radius = rim;
+            rimExtended = true;
+        }
+    } else if (theta > maxTheta || radius > maxRadius) {
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+
     float2 direction = radial > 0.000001 ? raySource.xy / radial : float2(0.0);
     float2 sourcePixel = center + direction * radius;
 
     if (sourcePixel.x < 0.0 || sourcePixel.y < 0.0 ||
         sourcePixel.x > sourceSize.x || sourcePixel.y > sourceSize.y) {
-        return float4(0.0, 0.0, 0.0, 1.0);
-    }
-    if (radius > maxRadius) {
-        return float4(0.0, 0.0, 0.0, 1.0);
+        if (fillScreen > 0.5) {
+            // A centre offset can push the rim past the sensor; clamp into the
+            // frame rather than showing black.
+            sourcePixel = clamp(sourcePixel, float2(0.0), sourceSize - 1.0);
+        } else {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
     }
 
     float2 sourceUV = sourcePixel / sourceSize;
@@ -176,7 +194,7 @@ fragment float4 FisheyeFragment(FEVertexOut in [[stage_in]],
     color.rgb = clamp(color.rgb + hazeLift * (color.rgb - luminance), 0.0, 1.0);
 
     float featherStart = maxRadius * (1.0 - edgeFeather);
-    if (edgeFeather > 0.0 && radius > featherStart) {
+    if (!rimExtended && edgeFeather > 0.0 && radius > featherStart) {
         float alpha = 1.0 - (radius - featherStart) / max(maxRadius - featherStart, 0.001);
         color.rgb *= clamp(alpha, 0.0, 1.0);
     }

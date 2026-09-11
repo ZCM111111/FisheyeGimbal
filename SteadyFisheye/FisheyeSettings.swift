@@ -31,11 +31,11 @@ struct FisheyeParameters {
 
 final class FisheyeSettings: ObservableObject {
     @Published var projection: FisheyeProjection = .equidistant
-    /// Half of the angular coverage the glass actually delivers. A clip-on
-    /// fisheye in front of the 0.5x lens covers far less than 180 degrees, and
-    /// an over-generous value here makes the model sample past the real image
-    /// circle, which shows up as black around the picture.
-    @Published var lensHalfFov: Float = 65
+    /// Half of the angular coverage the glass delivers. This does not create
+    /// black edges any more (fill mode pins samples to the rim), so its job is
+    /// purely geometric: how many degrees of real lens sit inside the image
+    /// circle. Too small stretches the picture, too large squeezes it.
+    @Published var lensHalfFov: Float = 90
     @Published var circleScale: Float = 1.0
     @Published var outputFov: Float = 78
     @Published var k1: Float = 0
@@ -58,7 +58,7 @@ final class FisheyeSettings: ObservableObject {
 
     func resetLens() {
         projection = .equidistant
-        lensHalfFov = 65
+        lensHalfFov = 90
         circleScale = 1.0
         outputFov = 78
         k1 = 0
