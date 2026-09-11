@@ -112,6 +112,7 @@ struct ContentView: View {
                                      aligning: app.isAligning,
                                      alignReport: app.alignReport,
                                      onAlign: { app.alignToCabinet() },
+                                     onCaptureFrame: { camera.captureRawFrame() },
                                      dismiss: {
                                          withAnimation(.easeOut(duration: 0.2)) {
                                              showControls = false
@@ -179,6 +180,9 @@ struct ContentView: View {
             app.stop()
         }
         .onChange(of: recorder.message) { value in
+            if let value = value { showToast(value) }
+        }
+        .onChange(of: camera.rawFrameMessage) { value in
             if let value = value { showToast(value) }
         }
         .background(

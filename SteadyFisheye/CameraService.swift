@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CoreImage
 import CoreMedia
 import CoreVideo
 import QuartzCore
@@ -79,6 +80,47 @@ final class CameraService: NSObject, ObservableObject,
 
     private var pendingGrid: ((LensCircleMeasurer.LumaGrid?) -> Void)?
     private let gridLock = NSLock()
+
+    // Saving one untouched frame, for checking detection and calibration
+    // against the real thing instead of against assumptions.
+    private var stillRequested = false
+    private let stillLock = NSLock()
+    private let ciContext = CIContext()
+    @Published private(set) var rawFrameMessage: String?
+
+    /// Writes the next camera frame, exactly as the pipeline receives it, into
+    /// the app's Documents folder. Visible in the Files app.
+    func captureRawFrame() {
+        stillLock.lock()
+        stillRequested = true
+        stillLock.unlock()
+    }
+
+    private func saveRawFrame(_ pixelBuffer: CVPixelBuffer) {
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let data = ciContext.jpegDataRepresentation(
+                of: image,
+                colorSpace: CGColorSpaceCreateDeviceRGB()) else {
+            DispatchQueue.main.async { [weak self] in
+                self?.rawFrameMessage = "原始帧编码失败"
+            }
+            return
+        }
+        let manager = FileManager.default
+        guard let documents = manager.urls(for: .documentDirectory,
+                                           in: .userDomainMask).first else { return }
+        let folder = documents.appendingPathComponent("SteadyFisheye/frames",
+                                                      isDirectory: true)
+        try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = "frame-\(Int(Date().timeIntervalSince1970)).jpg"
+        let url = folder.appendingPathComponent(name)
+        let ok = (try? data.write(to: url)) != nil
+        DispatchQueue.main.async { [weak self] in
+            self?.rawFrameMessage = ok
+                ? "原始帧已存到「文件」→ SteadyFisheye/frames/\(name)"
+                : "原始帧写入失败"
+        }
+    }
 
     /// Asks for one frame, decimated to a luminance grid, for measuring where
     /// the image circle sits. The handler runs off the main thread.
@@ -588,6 +630,12 @@ final class CameraService: NSObject, ObservableObject,
                 pending(grid)
             }
         }
+
+        stillLock.lock()
+        let wantsStill = stillRequested
+        stillRequested = false
+        stillLock.unlock()
+        if wantsStill { saveRawFrame(pixelBuffer) }
 
         onFrame?(pixelBuffer, captureTime)
     }

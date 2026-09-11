@@ -15,6 +15,7 @@ struct ControlPanel: View {
     let aligning: Bool
     let alignReport: String?
     let onAlign: () -> Void
+    let onCaptureFrame: () -> Void
     let dismiss: () -> Void
 
     @State private var showGeometry = true
@@ -305,6 +306,10 @@ struct ControlPanel: View {
                                  value: $settings.centerY, range: -0.12...0.12)
                 IndustrialSlider(title: "边缘羽化", unit: "", digits: 3,
                                  value: $settings.edgeFeather, range: 0...0.12)
+
+                PanelButton(title: "保存原始帧") {
+                    onCaptureFrame()
+                }
 
                 PanelButton(title: "重置镜头", isDestructive: true) {
                     settings.resetLens()
