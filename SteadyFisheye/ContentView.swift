@@ -11,7 +11,7 @@ struct ContentView: View {
     @State private var showControls = false
     @State private var rendererFailed = false
     @State private var baseFov: Float?
-    @State private var panelOffset: CGSize = CGSize(width: 0, height: 76)
+    @State private var panelOffset: CGSize = .zero
     @State private var dragStartOffset: CGSize?
 
     var body: some View {
@@ -40,24 +40,32 @@ struct ContentView: View {
             }
 
             if showControls {
-                FloatingControls(settings: settings,
-                                 motion: motion,
-                                 camera: camera,
-                                 dismiss: { withAnimation(.easeOut(duration: 0.2)) { showControls = false } })
-                    .frame(maxWidth: 360)
-                    .padding(.horizontal, 12)
-                    .offset(panelOffset)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                if dragStartOffset == nil { dragStartOffset = panelOffset }
-                                let start = dragStartOffset ?? panelOffset
-                                panelOffset = CGSize(width: start.width + value.translation.width,
-                                                     height: start.height + value.translation.height)
-                            }
-                            .onEnded { _ in dragStartOffset = nil }
-                    )
-                    .transition(.scale(scale: 0.96).combined(with: .opacity))
+                VStack {
+                    HStack(alignment: .top) {
+                        Spacer(minLength: 0)
+                        FloatingControls(settings: settings,
+                                         motion: motion,
+                                         camera: camera,
+                                         dismiss: { withAnimation(.easeOut(duration: 0.2)) { showControls = false } })
+                            .frame(maxWidth: 330)
+                            .offset(panelOffset)
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { value in
+                                        if dragStartOffset == nil { dragStartOffset = panelOffset }
+                                        let start = dragStartOffset ?? panelOffset
+                                        panelOffset = CGSize(width: start.width + value.translation.width,
+                                                             height: start.height + value.translation.height)
+                                    }
+                                    .onEnded { _ in dragStartOffset = nil }
+                            )
+                            .transition(.scale(scale: 0.96).combined(with: .opacity))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 64)
+                .padding(.bottom, 72)
             }
 
             if rendererFailed {
@@ -87,6 +95,10 @@ struct ContentView: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.65))
             }
+            Text(Bundle.main.buildStamp)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+                .accessibilityLabel("Build number")
             Spacer()
             Label(motion.locked ? "LOCKED" : "IMU…", systemImage: "gyroscope")
                 .foregroundStyle(motion.available ? .green : .orange)
@@ -234,7 +246,7 @@ private struct FloatingControls: View {
                     Button("Close", action: dismiss)
                 }
             }
-            .frame(maxHeight: 520)
+            .frame(maxHeight: 460)
             .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 6))
         }
     }
@@ -299,5 +311,15 @@ private struct MetalPreview: UIViewRepresentable {
         var renderer: MetalRenderer?
 
         init(camera: CameraService) { self.camera = camera }
+    }
+}
+
+extension Bundle {
+    /// Short build marker shown in the status bar, so the running install can
+    /// be identified without guessing which IPA is on the device.
+    var buildStamp: String {
+        let version = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "v\(version).\(build)"
     }
 }

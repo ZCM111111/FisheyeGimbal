@@ -24,6 +24,8 @@ workflows:
       - name: Build without signing
         script: |
           set -e
+          STAMP=$(date +%m%d%H%M)
+          echo "build stamp = $STAMP"
           xcodebuild \
             -project SteadyFisheye.xcodeproj \
             -scheme SteadyFisheye \
@@ -36,6 +38,8 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM='' \
             PROVISIONING_PROFILE_SPECIFIER='' \
+            MARKETING_VERSION=1.1 \
+            CURRENT_PROJECT_VERSION="$STAMP" \
             clean build
       - name: Package unsigned IPA
         script: |
