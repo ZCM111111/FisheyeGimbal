@@ -80,6 +80,76 @@ final class CameraApp: ObservableObject {
     private static let maxAimDegrees: Float = 25
     @Published private(set) var isFraming = false
 
+    /// A confident enough model hit; below this the classical detector is asked
+    /// instead, because acting on a weak box moves the picture for no reason.
+    ///
+    /// The model is a weak classifier — 0.15 is already a clear detection for it,
+    /// since its correct boxes score 0.13–0.41 — so this sits just above noise.
+    private static let minimumModelConfidence: Float = 0.15
+
+    /// What either detector found, in the pixels of the frame it measured.
+    struct Aim {
+        var found: Bool
+        var center: SIMD2<Float>
+        var radius: Float
+        var summary: String
+    }
+
+    /// One detection: the trained model first, the classical circle detector as
+    /// the fallback.
+    ///
+    /// The two run one after the other rather than side by side. A frame holds
+    /// only one pending request of each kind, and the fallback is cheap enough
+    /// that a duplicated wait is not worth the extra state.
+    private func detectAim(lenient: Bool, completion: @escaping (Aim, CGSize) -> Void) {
+        guard ScreenDetector.isAvailable else {
+            detectAimClassical(lenient: lenient, completion: completion)
+            return
+        }
+        camera.requestFrameImage { [weak self] image in
+            let detection = image.flatMap { ScreenDetector.detect(in: $0) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let detection = detection,
+                   detection.confidence >= Self.minimumModelConfidence,
+                   let image = image {
+                    completion(Aim(found: true,
+                                   center: SIMD2<Float>(Float(detection.center.x),
+                                                        Float(detection.center.y)),
+                                   radius: Float(detection.radius),
+                                   summary: detection.summary),
+                               CGSize(width: image.width, height: image.height))
+                } else {
+                    self.detectAimClassical(lenient: lenient, completion: completion)
+                }
+            }
+        }
+    }
+
+    /// The classical structural detector, which needs no model in the bundle.
+    private func detectAimClassical(lenient: Bool,
+                                    completion: @escaping (Aim, CGSize) -> Void) {
+        // The lenient bar is for the first alignment pass, which runs on the raw
+        // fisheye frame where the screen's circle is still bent.
+        let limit: Float = lenient ? 0.45 : 0.55
+        camera.requestFrameGrid { grid in
+            let result = grid.map { CabinetDetector.detect(grid: $0, supportLimit: limit) }
+            let sourceSize = grid?.sourceSize
+            DispatchQueue.main.async {
+                guard let result = result, let sourceSize = sourceSize else {
+                    completion(Aim(found: false, center: SIMD2<Float>(0, 0), radius: 0,
+                                   summary: "读不到画面，确认相机在出图"), .zero)
+                    return
+                }
+                completion(Aim(found: result.found,
+                               center: result.centerPixel,
+                               radius: result.radiusPixel,
+                               summary: result.summary),
+                           sourceSize)
+            }
+        }
+    }
+
     /// Aligns on the cabinet and then zooms so its screen always fills the same
     /// fraction of the frame. Same size, same place, every recording.
     func lockFraming() {
@@ -87,35 +157,26 @@ final class CameraApp: ObservableObject {
         isFraming = true
         alignReport = nil
 
-        camera.requestFrameGrid { [weak self] grid in
-            let result = grid.map { CabinetDetector.detect(grid: $0) }
-            let sourceSize = grid?.sourceSize
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.isFraming = false
-                guard let result = result, let sourceSize = sourceSize else {
-                    self.alignReport = "读不到画面，确认相机在出图"
-                    return
-                }
-                guard result.found,
-                      let direction = self.settings.cameraDirection(
-                        forSourcePixel: result.centerPixel,
-                        sourceSize: sourceSize),
-                      let angle = self.settings.cameraAngle(
-                        forSourcePixel: SIMD2<Float>(result.centerPixel.x + result.radiusPixel,
-                                                     result.centerPixel.y),
-                        sourceSize: sourceSize) else {
-                    self.alignReport = result.summary
-                    return
-                }
-                // Centre first, then zoom, so the measured radius refers to a
-                // circle that is no longer bent by the wide lens.
-                self.motion.reLock(lookingAlong: direction)
-                self.settings.applyFramingLock(screenAngle: angle)
-                self.alignReport = String(format: "已对准并锁定构图 · 占比 %.0f%% · %@",
-                                          Double(self.settings.cabinetFillTarget * 100),
-                                          result.summary)
+        detectAim(lenient: false) { [weak self] aim, sourceSize in
+            guard let self else { return }
+            self.isFraming = false
+            guard aim.found,
+                  let direction = self.settings.cameraDirection(
+                    forSourcePixel: aim.center,
+                    sourceSize: sourceSize),
+                  let angle = self.settings.cameraAngle(
+                    forSourcePixel: SIMD2<Float>(aim.center.x + aim.radius, aim.center.y),
+                    sourceSize: sourceSize) else {
+                self.alignReport = aim.summary
+                return
             }
+            // Centre first, then zoom, so the measured radius refers to a
+            // circle that is no longer bent by the wide lens.
+            self.motion.reLock(lookingAlong: direction)
+            self.settings.applyFramingLock(screenAngle: angle)
+            self.alignReport = String(format: "已对准并锁定构图 · 占比 %.0f%% · %@",
+                                      Double(self.settings.cabinetFillTarget * 100),
+                                      aim.summary)
         }
     }
 
@@ -136,59 +197,50 @@ final class CameraApp: ObservableObject {
     /// has distorted into a slightly non-circular shape, and once it is centred
     /// that distortion is gone, so the second measurement lands closer.
     private func alignPass(remaining: Int) {
-        camera.requestFrameGrid { [weak self] grid in
-            // Only the detection runs off the main thread: it is pure CPU work
-            // over a local grid, with no shared state.
-            //
-            // The first pass is deliberately lenient: it runs on the raw fisheye
-            // frame, where the screen's circle is bent by the wide lens. Once
-            // centred, the second pass sees a true circle and can be strict.
-            let limit: Float = remaining > 1 ? 0.45 : 0.55
-            let result = grid.map { CabinetDetector.detect(grid: $0, supportLimit: limit) }
-            let sourceSize = grid?.sourceSize
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard let result = result, let sourceSize = sourceSize else {
-                    self.isAligning = false
-                    self.alignReport = "读不到画面，确认相机在出图"
-                    return
-                }
-                guard result.found,
-                      let direction = self.settings.cameraDirection(
-                        forSourcePixel: result.centerPixel,
-                        sourceSize: sourceSize) else {
-                    self.isAligning = false
-                    self.alignReport = result.summary
-                    return
-                }
+        // Only the detection runs off the main thread: it is pure CPU work over
+        // a local frame, with no shared state.
+        //
+        // The first pass is deliberately lenient for the classical detector: it
+        // runs on the raw fisheye frame, where the screen's circle is bent by
+        // the wide lens. Once centred, the second pass sees a true circle and
+        // can be strict.
+        detectAim(lenient: remaining > 1) { [weak self] aim, sourceSize in
+            guard let self else { return }
+            guard aim.found,
+                  let direction = self.settings.cameraDirection(
+                    forSourcePixel: aim.center,
+                    sourceSize: sourceSize) else {
+                self.isAligning = false
+                self.alignReport = aim.summary
+                return
+            }
 
-                // Refuse a swing the frame cannot survive; report it instead of
-                // wrecking the picture.
-                let offAxis = acos(min(max(direction.z, -1), 1)) * 180 / .pi
-                guard offAxis <= Self.maxAimDegrees else {
-                    self.isAligning = false
-                    self.alignReport = String(format: "认到的机台偏离画面中心 %.0f°（上限 %.0f°），请先把手机大致对准机台。%@",
-                                              Double(offAxis), Double(Self.maxAimDegrees),
-                                              result.summary)
-                    return
-                }
+            // Refuse a swing the frame cannot survive; report it instead of
+            // wrecking the picture.
+            let offAxis = acos(min(max(direction.z, -1), 1)) * 180 / .pi
+            guard offAxis <= Self.maxAimDegrees else {
+                self.isAligning = false
+                self.alignReport = String(format: "认到的机台偏离画面中心 %.0f°（上限 %.0f°），请先把手机大致对准机台。%@",
+                                          Double(offAxis), Double(Self.maxAimDegrees),
+                                          aim.summary)
+                return
+            }
 
-                // Show where it locked on *before* the view moves, so a wrong
-                // detection is visible instead of mysterious.
-                self.detectionMarker = self.mapToPreview?(result.centerPixel, sourceSize)
-                // Fades on its own so it does not sit over the preview forever.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-                    self?.detectionMarker = nil
-                }
+            // Show where it locked on *before* the view moves, so a wrong
+            // detection is visible instead of mysterious.
+            self.detectionMarker = self.mapToPreview?(aim.center, sourceSize)
+            // Fades on its own so it does not sit over the preview forever.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                self?.detectionMarker = nil
+            }
 
-                self.motion.reLock(lookingAlong: direction)
-                if remaining > 1 {
-                    self.alignPass(remaining: remaining - 1)
-                } else {
-                    self.isAligning = false
-                    self.alignReport = String(format: "已对准（偏离 %.0f°）· %@",
-                                              Double(offAxis), result.summary)
-                }
+            self.motion.reLock(lookingAlong: direction)
+            if remaining > 1 {
+                self.alignPass(remaining: remaining - 1)
+            } else {
+                self.isAligning = false
+                self.alignReport = String(format: "已对准（偏离 %.0f°）· %@",
+                                          Double(offAxis), aim.summary)
             }
         }
     }

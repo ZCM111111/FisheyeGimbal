@@ -79,6 +79,7 @@ final class CameraService: NSObject, ObservableObject,
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
     private var pendingGrid: ((FrameGrid?) -> Void)?
+    private var pendingImage: ((CGImage?) -> Void)?
     private let gridLock = NSLock()
 
     // Saving one untouched frame, for checking detection and calibration
@@ -127,6 +128,17 @@ final class CameraService: NSObject, ObservableObject,
     func requestFrameGrid(_ handler: @escaping (FrameGrid?) -> Void) {
         gridLock.lock()
         pendingGrid = handler
+        gridLock.unlock()
+    }
+
+    /// The same one-shot hand-off, but as a full image: the trained screen
+    /// detector needs colour and detail, which the luminance grid throws away.
+    ///
+    /// The image is rendered here, while the capture buffer is still valid, so
+    /// nothing is held across frames.
+    func requestFrameImage(_ handler: @escaping (CGImage?) -> Void) {
+        gridLock.lock()
+        pendingImage = handler
         gridLock.unlock()
     }
 
@@ -622,12 +634,21 @@ final class CameraService: NSObject, ObservableObject,
         // buffer is held across frames.
         gridLock.lock()
         let pending = pendingGrid
+        let pendingImage = self.pendingImage
         pendingGrid = nil
+        self.pendingImage = nil
         gridLock.unlock()
         if let pending = pending {
             let grid = FrameGrid.make(from: pixelBuffer)
             DispatchQueue.global(qos: .userInitiated).async {
                 pending(grid)
+            }
+        }
+        if let pendingImage = pendingImage {
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let image = ciContext.createCGImage(ciImage, from: ciImage.extent)
+            DispatchQueue.global(qos: .userInitiated).async {
+                pendingImage(image)
             }
         }
 

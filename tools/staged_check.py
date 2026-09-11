@@ -19,6 +19,10 @@ ALLOWED_IMAGES = (
     "SteadyFisheye/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png",
     "icon-1024.png",
 )
+# Model weights carry no footage: they are numbers learned from frames that stay
+# on this machine. The CoreML package is generated during the build, not
+# committed, so the ONNX is the only binary that needs to travel.
+ALLOWED_MODELS = ("models/screen.onnx",)
 ALLOWED_SUFFIXES = (".swift", ".metal", ".plist", ".json", ".md", ".py", ".yaml",
                     ".yml", ".pbxproj", ".xcscheme", ".gitignore", ".txt")
 
@@ -42,7 +46,7 @@ def main():
             problems.append((path, "dataset/test output path"))
             continue
         name = os.path.basename(path)
-        if path in ALLOWED_IMAGES:
+        if path in ALLOWED_IMAGES or path in ALLOWED_MODELS:
             continue
         suffix = os.path.splitext(name)[1].lower()
         if suffix in ALLOWED_SUFFIXES or name in (".gitignore", "codemagic.yaml"):

@@ -22,6 +22,11 @@ runs/
 !models/*.onnx
 !models/*.mlmodel
 
+# The CoreML package is generated from the ONNX during the Codemagic build:
+# coremltools is macOS-only, so it cannot exist in a Windows checkout.
+SteadyFisheye/*.mlpackage/
+SteadyFisheye/*.mlmodelc/
+
 # Local scratch
 icon-sizes.png
 *.ips

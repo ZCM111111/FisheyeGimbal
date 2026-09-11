@@ -21,6 +21,19 @@ workflows:
           set -e
           xcodebuild -version
           xcodebuild -project SteadyFisheye.xcodeproj -list
+      - name: Convert the trained detector to CoreML
+        script: |
+          set -e
+          # coremltools only exists on macOS, so the ONNX that was trained on
+          # Windows becomes a .mlpackage here. The package is a build product:
+          # it is generated, never committed.
+          test -f models/screen.onnx
+          python3 -m venv "$HOME/mlvenv"
+          "$HOME/mlvenv/bin/pip" install -q --upgrade pip
+          "$HOME/mlvenv/bin/pip" install -q coremltools onnx
+          "$HOME/mlvenv/bin/python" tools/onnx_to_coreml.py
+          test -d SteadyFisheye/ScreenDetector.mlpackage
+          du -sh SteadyFisheye/ScreenDetector.mlpackage
       - name: Build without signing
         script: |
           set -e
