@@ -88,6 +88,13 @@ struct ControlPanel: View {
             ReadoutRow(label: "lock",
                        value: motion.locked ? "locked" : "no imu",
                        valueColor: motion.available ? Theme.success : Theme.danger)
+            if motion.mode == .horizon {
+                // Live gravity reference: this keeps updating even while the
+                // phone is held still, and it is never latched by a button.
+                ReadoutRow(label: "tilt",
+                           value: String(format: "%+.1f°  live", Double(motion.horizonTilt)),
+                           valueColor: abs(motion.horizonTilt) < 0.5 ? Theme.success : Theme.accent)
+            }
         }
         .padding(Theme.sp3)
         .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
@@ -174,15 +181,6 @@ struct ControlPanel: View {
     private var stabilizationGroup: some View {
         PanelSection(title: "stabilization", expanded: $showStabilization) {
             VStack(alignment: .leading, spacing: Theme.sp4) {
-                IndustrialSlider(title: "sensor smoothing", unit: "s", digits: 2,
-                                 value: Binding(get: { Float(motion.smoothing) },
-                                                set: { motion.smoothing = Double($0) }),
-                                 range: 0...0.30)
-                IndustrialSlider(title: "display smoothing", unit: "s", digits: 2,
-                                 value: Binding(get: { Float(motion.displaySmoothing) },
-                                                set: { motion.displaySmoothing = Double($0) }),
-                                 range: 0...0.18)
-
                 if motion.mode == .follow {
                     IndustrialSlider(title: "follow time", unit: "s", digits: 2,
                                      value: Binding(get: { Float(motion.dampingTime) },
@@ -190,8 +188,23 @@ struct ControlPanel: View {
                                      range: 0.2...3.0)
                 }
 
-                PanelButton(title: "recenter") {
-                    motion.recenter()
+                // Any value above zero deliberately leaves part of the shake
+                // uncorrected, so the default is a hard zero.
+                IndustrialSlider(title: "lock lag", unit: "s", digits: 2,
+                                 value: Binding(get: { Float(motion.displaySmoothing) },
+                                                set: { motion.displaySmoothing = Double($0) }),
+                                 range: 0...0.18)
+
+                if motion.mode == .horizon {
+                    Text("HORIZON IS REFERENCED TO GRAVITY CONTINUOUSLY — NOTHING TO PRESS")
+                        .font(Theme.label(8))
+                        .tracking(0.6)
+                        .foregroundColor(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    PanelButton(title: "recenter") {
+                        motion.recenter()
+                    }
                 }
             }
         }

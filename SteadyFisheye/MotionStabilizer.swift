@@ -22,12 +22,17 @@ final class MotionStabilizer: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case hold
         case follow
+        /// Roll-only stabilisation referenced to gravity, the way a 360
+        /// camera's horizon lock behaves: the horizon stays level while yaw
+        /// and pitch follow the phone freely.
+        case horizon
 
         var id: String { rawValue }
         var title: String {
             switch self {
             case .hold: return "Hold"
             case .follow: return "Follow"
+            case .horizon: return "Horizon"
             }
         }
     }
@@ -36,6 +41,10 @@ final class MotionStabilizer: ObservableObject {
     @Published private(set) var locked = false
     @Published private(set) var mode: Mode = .hold
     @Published private(set) var status = "Waiting for motion"
+    /// How far the phone is rolled away from level, in degrees. Derived from
+    /// gravity continuously, never latched from a button, so it is always the
+    /// live reference rather than a stale snapshot.
+    @Published private(set) var horizonTilt: Float = 0
 
     private let manager = CMMotionManager()
     private let motionQueue: OperationQueue = {
@@ -62,7 +71,15 @@ final class MotionStabilizer: ObservableObject {
     private var renderVersion: UInt64 = 0
     private var lastRenderedSampleTime: TimeInterval = 0
     private var hasRenderedSample = false
-    private var displaySmoothingValue: Double = 0.035
+    /// No post-hoc smoothing by default: any smoothing applied to the
+    /// correction signal is a residual error, and leaving small fast shake
+    /// uncorrected is exactly the bug this default removes.
+    private var displaySmoothingValue: Double = 0
+    private var gravityFiltered = SIMD3<Float>(0, -1, 0)
+    private var hasGravity = false
+    private var horizonQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1))
+    private var horizonTiltValue: Float = 0
+    private var lastHorizonPublish: TimeInterval = 0
     private var activeStatusPublished = false
 
     // Camera coordinates are +X right, +Y down, +Z out through the back camera.
@@ -162,6 +179,30 @@ final class MotionStabilizer: ObservableObject {
         return result
     }
 
+    /// Roll-only correction taken straight from gravity, the way a 360 camera
+    /// holds its horizon: yaw and pitch stay free, the horizon stays level.
+    /// Nothing is latched here, which is what makes it work even when the
+    /// phone is already tilted before the mode is selected.
+    ///
+    /// Must be called with `lock` held.
+    private func horizonCorrection() -> simd_quatf {
+        // Gravity in camera coordinates: +X right, +Y down, +Z out the back.
+        let g = cameraToDevice * gravityFiltered
+        let planar = (g.x * g.x + g.y * g.y).squareRoot()
+        // Roll is undefined when the optical axis points at the ground or the
+        // sky, so hold the previous correction rather than snapping wildly.
+        guard planar > 0.2 else { return horizonQuaternion }
+
+        // Pick the angle that rotates gravity exactly onto the image "down"
+        // axis, which is what puts the horizon level.
+        let theta = atan2(-g.x, g.y)
+        horizonTiltValue = theta * 180 / Float.pi
+        // Rolling about the camera's optical axis is a rotation about -Z in
+        // the Core Motion device frame.
+        horizonQuaternion = simd_quatf(angle: -theta, axis: SIMD3<Float>(0, 0, 1))
+        return horizonQuaternion
+    }
+
     func start() {
         guard manager.isDeviceMotionAvailable else {
             publishAvailability(false, status: "Device motion unavailable")
@@ -192,6 +233,11 @@ final class MotionStabilizer: ObservableObject {
         renderVersion = 0
         hasRenderedSample = false
         lastRenderedSampleTime = 0
+        gravityFiltered = SIMD3<Float>(0, -1, 0)
+        hasGravity = false
+        horizonQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1))
+        horizonTiltValue = 0
+        lastHorizonPublish = 0
         activeStatusPublished = false
         hasSample = false
         lastTimestamp = 0
@@ -201,6 +247,13 @@ final class MotionStabilizer: ObservableObject {
 
     func recenter() {
         lock.lock()
+        // Horizon mode is referenced to gravity every sample, so latching the
+        // current attitude would bake in whatever tilt the phone happens to
+        // have and leave the image permanently crooked. Ignore it there.
+        guard modeValue != .horizon else {
+            lock.unlock()
+            return
+        }
         if hasSample {
             lockedQuaternion = filtered
             lockVersion &+= 1
@@ -253,6 +306,9 @@ final class MotionStabilizer: ObservableObject {
                                   iz: Float(attitude.z),
                                   r: Float(attitude.w))
         let timestamp = deviceMotion.timestamp
+        let gravity = SIMD3<Float>(Float(deviceMotion.gravity.x),
+                                   Float(deviceMotion.gravity.y),
+                                   Float(deviceMotion.gravity.z))
 
         lock.lock()
         if !hasSample {
@@ -268,15 +324,42 @@ final class MotionStabilizer: ObservableObject {
         filtered = slerpShortest(filtered, current,
                                  amount: Float(min(max(alpha, 0), 1)))
 
+        // Gravity is a reference direction rather than a rate, so gently
+        // smoothing it removes accelerometer noise without the horizon ever
+        // lagging behind the phone.
+        if !hasGravity {
+            gravityFiltered = gravity
+            hasGravity = true
+        }
+        let gravityAlpha = Float(1 - exp(-dt / 0.06))
+        gravityFiltered += (gravity - gravityFiltered) * gravityAlpha
+        let gravityLength = simd_length(gravityFiltered)
+        if gravityLength > 0.001 {
+            gravityFiltered /= gravityLength
+        }
+
         if modeValue == .follow {
             let beta = 1 - exp(-dt / max(dampingValue, 0.15))
             lockedQuaternion = slerpShortest(lockedQuaternion, filtered,
                                              amount: Float(min(max(beta, 0), 1)))
         }
 
-        // qCurrent^-1 * qLocked maps a ray in the locked device frame into
-        // the current device frame. The basis conversion wraps camera pixels.
-        let relativeDeviceQuaternion = filtered.inverse * lockedQuaternion
+        // The correction has to be built from the RAW attitude. Using the
+        // smoothed attitude as the base cancels only the slow component of the
+        // motion: with R = q_filtered^-1 * q_locked the direction seen at an
+        // output pixel works out to e(t) * constant, where e(t) is exactly the
+        // high-frequency part the low pass removed. That left small, fast hand
+        // shake completely uncorrected while slow pans looked stabilised.
+        // Raw attitude gives R = q_true^-1 * q_locked and a world-locked image.
+        let relativeDeviceQuaternion: simd_quatf
+        switch modeValue {
+        case .hold, .follow:
+            // qCurrent^-1 * qLocked maps a ray in the locked device frame into
+            // the current device frame.
+            relativeDeviceQuaternion = current.inverse * lockedQuaternion
+        case .horizon:
+            relativeDeviceQuaternion = horizonCorrection()
+        }
         let relativeDevice = simd_float3x3(relativeDeviceQuaternion)
         let relativeCamera = cameraToDevice * relativeDevice * cameraToDevice
         latest.cameraFromLocked = relativeCamera
@@ -290,7 +373,18 @@ final class MotionStabilizer: ObservableObject {
         if samples.count > maxSampleCount {
             samples.removeFirst(samples.count - maxSampleCount)
         }
+        let tiltToPublish: Float? = modeValue == .horizon ? horizonTiltValue : nil
+        let tiltIsDue = timestamp - lastHorizonPublish > 0.08
+        if tiltIsDue {
+            lastHorizonPublish = timestamp
+        }
         lock.unlock()
+
+        if let tiltToPublish = tiltToPublish, tiltIsDue {
+            DispatchQueue.main.async { [weak self] in
+                self?.horizonTilt = tiltToPublish
+            }
+        }
 
         lock.lock()
         let shouldPublishActive = !activeStatusPublished

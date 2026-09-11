@@ -126,15 +126,25 @@ struct ContentView: View {
                 .frame(width: 16)
                 .accessibilityLabel(motion.locked ? "Locked" : "No motion data")
 
-            Button { motion.recenter() } label: {
-                Image(systemName: "scope")
+            if motion.mode == .horizon {
+                // Gravity keeps the horizon level on its own, so there is no
+                // reference to latch and nothing to press.
+                Image(systemName: "level")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Theme.text)
+                    .foregroundColor(abs(motion.horizonTilt) < 0.5 ? Theme.success : Theme.accent)
                     .frame(width: 32, height: 32)
-                    .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
+                    .accessibilityLabel("Horizon locked to gravity")
+            } else {
+                Button { motion.recenter() } label: {
+                    Image(systemName: "scope")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Theme.text)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Recenter lock")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Recenter lock")
 
             Button { withAnimation(.easeOut(duration: 0.2)) { showControls.toggle() } } label: {
                 Image(systemName: "slider.horizontal.3")
@@ -161,6 +171,9 @@ struct ContentView: View {
         HStack(spacing: Theme.sp4) {
             metric("fov", "\(Int(settings.outputFov))°")
             metric("mode", motion.mode.title)
+            if motion.mode == .horizon {
+                metric("tilt", String(format: "%+.1f°", Double(motion.horizonTilt)))
+            }
             metric("rate", "\(camera.measuredFPS) fps")
             Spacer(minLength: 0)
         }
