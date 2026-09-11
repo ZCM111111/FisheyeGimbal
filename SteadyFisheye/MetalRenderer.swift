@@ -271,6 +271,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         motion.setTravelLimit(parameters.travel)
         let matrix = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
         let columns = matrix.columns
+        stateLock.lock()
+        lastMatrix = matrix
+        lastSourceSize = CGSize(width: CGFloat(frame.size.x), height: CGFloat(frame.size.y))
+        stateLock.unlock()
 
         return FEUniforms(
             rotation0: SIMD4<Float>(columns.0, 0),
@@ -296,6 +300,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// the whole picture, and the moment it passes 100% black corners appear
     /// because the model is sampling past the real image circle.
     var coverageHandler: ((Float) -> Void)?
+
+    /// Pose and frame size from the most recent draw, shared with the tap
+    /// handler so a preview point can be traced back to the sensor.
+    private let stateLock = NSLock()
+    private var lastMatrix = matrix_identity_float3x3
+    private var lastSourceSize = CGSize.zero
 
     private func updateHUD(sourceSize: CGSize, viewSize: CGSize) {
         let now = CACurrentMediaTime()
@@ -323,6 +333,66 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
         let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
         return atan(cornerRadius / max(focalOut, 0.001))
+    }
+
+    /// Maps a point on the corrected preview back to the sensor's normalised
+    /// coordinate space, which is what the focus and exposure APIs expect.
+    ///
+    /// This is not a coordinate flip. The preview has been undistorted and then
+    /// rotated by the lock, so the point has to travel back through all of it:
+    /// screen pixel -> pinhole ray -> un-rotate the lock -> lens model ->
+    /// source pixel -> sensor. Feeding a raw screen point to
+    /// `focusPointOfInterest` would focus somewhere else entirely.
+    func devicePoint(forViewPoint point: CGPoint) -> CGPoint? {
+        stateLock.lock()
+        let matrix = lastMatrix
+        let sourceSize = lastSourceSize
+        stateLock.unlock()
+
+        let viewSize = view.bounds.size
+        guard sourceSize.width > 1, sourceSize.height > 1,
+              viewSize.width > 1, viewSize.height > 1 else { return nil }
+
+        let parameters = settings.parameters(sourceSize: sourceSize)
+        let halfWidth = Float(viewSize.width) * 0.5
+        let halfHeight = Float(viewSize.height) * 0.5
+        let cornerRadius = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
+        let requested = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
+        let cornerTheta = min(max(parameters.maxTheta - parameters.travel, 0.09), 1.36)
+        let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
+        let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
+
+        let xy = SIMD2<Float>((Float(point.x) - halfWidth) / focalOut,
+                              (Float(point.y) - halfHeight) / focalOut)
+        let rayLocked = simd_normalize(SIMD3<Float>(xy.x, xy.y, 1))
+        let raySource = simd_normalize(matrix * rayLocked)
+        let theta = acos(min(max(raySource.z, -1), 1))
+
+        let radiusModel = parameters.projection < 0.5
+            ? parameters.focal * theta
+            : 2 * parameters.focal * sin(theta * 0.5)
+        let normalized = radiusModel / max(parameters.maxRadius, 0.001)
+        let radius = radiusModel * (1 + parameters.k1 * normalized * normalized
+                                    + parameters.k2 * normalized * normalized
+                                        * normalized * normalized)
+
+        let radial = (raySource.x * raySource.x + raySource.y * raySource.y).squareRoot()
+        let direction = radial > 1e-6
+            ? SIMD2<Float>(raySource.x / radial, raySource.y / radial)
+            : SIMD2<Float>(0, 0)
+        let source = parameters.center + direction * radius
+
+        let u = source.x / Float(sourceSize.width)
+        let v = source.y / Float(sourceSize.height)
+        guard u >= 0, u <= 1, v >= 0, v <= 1 else { return nil }
+
+        // The capture connection rotates the buffers into portrait for us, so
+        // undo that rotation to land in the sensor's own landscape space:
+        // device x comes from the buffer's y, device y from the buffer's x.
+        if sourceSize.height >= sourceSize.width {
+            return CGPoint(x: CGFloat(v), y: CGFloat(1 - u))
+        }
+        return CGPoint(x: CGFloat(u), y: CGFloat(v))
     }
 
     /// Mirrors the focal choice in the fragment shader so the panel can show

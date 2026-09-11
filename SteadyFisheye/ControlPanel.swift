@@ -89,6 +89,13 @@ struct ControlPanel: View {
                        value: "\(camera.measuredFPS) / 60 帧",
                        valueColor: camera.measuredFPS >= 55 ? Theme.success : Theme.warning)
             ReadoutRow(label: "镜头", value: camera.lens.title)
+            // Live exposure compensation, and whether AE/AF is frozen.
+            ReadoutRow(label: "曝光",
+                       value: String(format: "%+.1f EV", Double(camera.exposureBias)),
+                       valueColor: abs(camera.exposureBias) > 0.05 ? Theme.accent : Theme.text)
+            ReadoutRow(label: "AE/AF",
+                       value: camera.aeafLocked ? "已锁定" : "自动",
+                       valueColor: camera.aeafLocked ? Theme.accent : Theme.text)
             // Calibration gauge: below 100% there is still unused picture
             // hidden by the crop, above 100% the model is sampling past the
             // real image circle and black corners appear.

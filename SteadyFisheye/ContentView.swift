@@ -15,6 +15,12 @@ struct ContentView: View {
     @State private var baseFov: Float?
     @State private var panelOffset: CGSize = .zero
     @State private var dragStartOffset: CGSize?
+    /// Where the last tap landed, in preview coordinates, for the reticle.
+    @State private var focusPoint: CGPoint?
+    @State private var showExposure = false
+    @State private var focusToken = 0
+    @State private var ignoreNextTap = false
+    @State private var renderer: MetalRenderer?
 
     var body: some View {
         ZStack {
@@ -23,8 +29,14 @@ struct ContentView: View {
             MetalPreview(camera: camera,
                          settings: settings,
                          motion: motion,
-                         failed: $rendererFailed)
+                         failed: $rendererFailed,
+                         onRendererReady: { renderer = $0 })
                 .ignoresSafeArea()
+                .simultaneousGesture(
+                    SpatialTapGesture()
+                        .onEnded { value in handleTap(at: value.location) }
+                )
+                .onLongPressGesture(minimumDuration: 0.55) { toggleAEAFLock() }
                 .gesture(
                     MagnificationGesture()
                         .onChanged { value in
@@ -34,6 +46,23 @@ struct ContentView: View {
                         }
                         .onEnded { _ in baseFov = nil }
                 )
+
+            // Focus reticle and exposure slider, drawn straight over the frame
+            // the way the system camera does it.
+            if let point = focusPoint {
+                FocusReticle()
+                    .position(point)
+                    .allowsHitTesting(false)
+
+                if showExposure {
+                    ExposureSlider(value: Binding(
+                                    get: { camera.exposureBias },
+                                    set: { camera.setExposureBias($0) }),
+                                   range: camera.exposureBiasRange,
+                                   onInteraction: { scheduleFocusHide() })
+                        .position(exposureSliderPosition(for: point))
+                }
+            }
 
             VStack(spacing: 0) {
                 statusBar
@@ -100,6 +129,74 @@ struct ContentView: View {
         .onDisappear { app.stop() }
     }
 
+    // MARK: - Focus and exposure interaction
+
+    /// A tap means "focus and meter here", exactly like the system camera. The
+    /// point has to be traced back through the undistortion and the lock before
+    /// the camera can use it.
+    private func handleTap(at location: CGPoint) {
+        if ignoreNextTap {
+            // A long press already handled this gesture; do not also re-focus.
+            ignoreNextTap = false
+            return
+        }
+        if camera.aeafLocked {
+            // While AE/AF is locked a tap releases it, as the system camera does.
+            toggleAEAFLock()
+            withAnimation(.easeOut(duration: 0.2)) { focusPoint = nil; showExposure = false }
+            return
+        }
+
+        // Trace the tap back to the sensor; fall back to the centre so a tap
+        // still does something if the lens state is not ready yet.
+        let devicePoint = renderer?.devicePoint(forViewPoint: location)
+            ?? CGPoint(x: 0.5, y: 0.5)
+        camera.focusAndExpose(atDevicePoint: devicePoint)
+
+        withAnimation(.easeOut(duration: 0.15)) {
+            focusPoint = location
+            showExposure = true
+        }
+        scheduleFocusHide()
+    }
+
+    private func toggleAEAFLock() {
+        let locked = !camera.aeafLocked
+        camera.setAEAFLocked(locked)
+        ignoreNextTap = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { ignoreNextTap = false }
+        if locked, focusPoint == nil {
+            let center = CGPoint(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY)
+            withAnimation(.easeOut(duration: 0.15)) { focusPoint = center }
+        }
+        scheduleFocusHide()
+    }
+
+    /// The reticle disappears quickly; the exposure slider lingers, then goes.
+    private func scheduleFocusHide() {
+        focusToken += 1
+        let token = focusToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
+            guard token == focusToken else { return }
+            withAnimation(.easeOut(duration: 0.3)) {
+                focusPoint = nil
+                showExposure = false
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) {
+            guard token == focusToken else { return }
+            withAnimation(.easeOut(duration: 0.3)) { showExposure = false }
+        }
+    }
+
+    /// Keeps the slider on screen beside the reticle.
+    private func exposureSliderPosition(for point: CGPoint) -> CGPoint {
+        let screen = UIScreen.main.bounds.size
+        let wantsRight = point.x + 62 + 46 < screen.width
+        let x = wantsRight ? point.x + 62 + 46 : max(point.x - 62 - 46, 46)
+        return CGPoint(x: x, y: min(max(point.y, 100), screen.height - 110))
+    }
+
     // MARK: - Status bar
 
     private var statusBar: some View {
@@ -121,6 +218,21 @@ struct ContentView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .truncationMode(.middle)
+
+            if camera.aeafLocked {
+                Button { toggleAEAFLock() } label: {
+                    Text("AE/AF")
+                        .font(Theme.label(9))
+                        .tracking(0.3)
+                        .foregroundColor(Theme.onAccent)
+                        .padding(.horizontal, 6)
+                        .frame(height: 18)
+                        .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .accessibilityLabel("解除AE/AF锁定")
+            }
 
             Spacer(minLength: Theme.sp1)
 
@@ -224,6 +336,7 @@ private struct MetalPreview: UIViewRepresentable {
     let settings: FisheyeSettings
     let motion: MotionStabilizer
     @Binding var failed: Bool
+    let onRendererReady: (MetalRenderer) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(camera: camera) }
 
@@ -237,6 +350,10 @@ private struct MetalPreview: UIViewRepresentable {
             renderer.coverageHandler = { [weak camera] percent in
                 camera?.reportCoverage(percent)
             }
+            // Hand the renderer back so a tap can be traced to the sensor. The
+            // hand-off is deferred: mutating state while the view is being
+            // built would be a SwiftUI violation.
+            DispatchQueue.main.async { onRendererReady(renderer) }
             camera.onFrame = { [weak renderer] pixelBuffer, timestamp in
                 renderer?.enqueue(pixelBuffer: pixelBuffer, timestamp: timestamp)
             }
