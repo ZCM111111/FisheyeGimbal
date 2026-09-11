@@ -45,7 +45,7 @@ struct ControlPanel: View {
 
     private var header: some View {
         HStack(spacing: Theme.sp3) {
-            Text("控制台")
+            Text("鱼眼校正")
                 .font(Theme.label(13))
                 .tracking(1.0)
                 .foregroundColor(Theme.text)
@@ -64,7 +64,7 @@ struct ControlPanel: View {
                     .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("关闭控制面板")
+            .accessibilityLabel("关闭鱼眼校正")
         }
         .padding(.horizontal, Theme.sp4)
         .padding(.vertical, Theme.sp3)

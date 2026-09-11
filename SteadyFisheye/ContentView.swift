@@ -8,7 +8,9 @@ struct ContentView: View {
     @ObservedObject var motion: MotionStabilizer
     @ObservedObject var camera: CameraService
 
-    @State private var showControls = false
+    /// Open on launch: the calibration console is the whole point of the app,
+    /// and hiding it behind an unlabelled icon made it undiscoverable.
+    @State private var showControls = true
     @State private var rendererFailed = false
     @State private var baseFov: Float?
     @State private var panelOffset: CGSize = .zero
@@ -49,7 +51,12 @@ struct ContentView: View {
                                      motion: motion,
                                      camera: camera,
                                      dismiss: {
-                                         withAnimation(.easeOut(duration: 0.2)) { showControls = false }
+                                         withAnimation(.easeOut(duration: 0.2)) {
+                                             showControls = false
+                                             // Never let a dragged panel come
+                                             // back off-screen next time.
+                                             panelOffset = .zero
+                                         }
                                      })
                             .offset(panelOffset)
                             .gesture(
@@ -147,15 +154,22 @@ struct ContentView: View {
             }
 
             Button { withAnimation(.easeOut(duration: 0.2)) { showControls.toggle() } } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(showControls ? Theme.onAccent : Theme.text)
-                    .frame(width: 32, height: 32)
-                    .background(showControls ? Theme.accent : Theme.surface2,
-                                in: RoundedRectangle(cornerRadius: Theme.rBase))
+                HStack(spacing: 5) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(showControls ? "收起" : "校正")
+                        .font(Theme.label(11))
+                        .tracking(0.3)
+                }
+                .foregroundColor(showControls ? Theme.onAccent : Theme.text)
+                .padding(.horizontal, 9)
+                .frame(height: 32)
+                .background(showControls ? Theme.accent : Theme.surface2,
+                            in: RoundedRectangle(cornerRadius: Theme.rBase))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("开关控制面板")
+            .fixedSize()
+            .accessibilityLabel("开关鱼眼校正面板")
         }
         .lineLimit(1)
         .padding(.horizontal, Theme.sp3)
