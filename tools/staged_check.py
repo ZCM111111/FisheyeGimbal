@@ -20,9 +20,9 @@ ALLOWED_IMAGES = (
     "icon-1024.png",
 )
 # Model weights carry no footage: they are numbers learned from frames that stay
-# on this machine. The CoreML package is generated during the build, not
-# committed, so the ONNX is the only binary that needs to travel.
-ALLOWED_MODELS = ("models/screen.onnx",)
+# on this machine. The .pt is what builds the CoreML package during the Codemagic
+# build; the .onnx is what the measurement scripts in this folder read.
+ALLOWED_MODELS = ("models/screen.pt", "models/screen.onnx")
 ALLOWED_SUFFIXES = (".swift", ".metal", ".plist", ".json", ".md", ".py", ".yaml",
                     ".yml", ".pbxproj", ".xcscheme", ".gitignore", ".txt")
 

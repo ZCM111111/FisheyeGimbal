@@ -21,19 +21,21 @@ workflows:
           set -e
           xcodebuild -version
           xcodebuild -project SteadyFisheye.xcodeproj -list
-      - name: Convert the trained detector to CoreML
+      - name: Build the CoreML detector (optional)
         script: |
-          set -e
-          # coremltools only exists on macOS, so the ONNX that was trained on
-          # Windows becomes a .mlpackage here. The package is a build product:
-          # it is generated, never committed.
-          test -f models/screen.onnx
-          python3 -m venv "$HOME/mlvenv"
-          "$HOME/mlvenv/bin/pip" install -q --upgrade pip
-          "$HOME/mlvenv/bin/pip" install -q coremltools onnx
-          "$HOME/mlvenv/bin/python" tools/onnx_to_coreml.py
-          test -d SteadyFisheye/ScreenDetector.mlpackage
-          du -sh SteadyFisheye/ScreenDetector.mlpackage
+          # Deliberately allowed to fail. The app ships either way, falling back
+          # to the classical circle detector when the bundle has no model, so a
+          # broken export must never take the whole build down with it.
+          if [ ! -f models/screen.pt ]; then
+            echo "no models/screen.pt — building without the detector"
+            exit 0
+          fi
+          python3 -m venv "$HOME/mlvenv" || exit 0
+          "$HOME/mlvenv/bin/pip" install -q --upgrade pip || exit 0
+          # numpy is pinned: coremltools 9's export breaks on numpy 2.4.
+          "$HOME/mlvenv/bin/pip" install -q coremltools "numpy<=2.3.5" torch ultralytics pillow || exit 0
+          "$HOME/mlvenv/bin/python" tools/make_coreml.py || exit 0
+          du -sh SteadyFisheye/ScreenDetector.mlmodelc
       - name: Build without signing
         script: |
           set -e
@@ -54,6 +56,22 @@ workflows:
             MARKETING_VERSION=1.1 \
             CURRENT_PROJECT_VERSION="$STAMP" \
             clean build
+      - name: Inject the detector into the app
+        script: |
+          set -e
+          # Copied in after the build rather than referenced from the Xcode
+          # project: a resource the project points at but the build cannot
+          # produce is a hard build failure, and the model is meant to be
+          # optional. The IPA is unsigned at this point, so adding a file here
+          # needs no re-signing.
+          APP=$(find build/Build/Products -maxdepth 3 -name 'SteadyFisheye.app' -type d | head -1)
+          test -n "$APP"
+          if [ -d SteadyFisheye/ScreenDetector.mlmodelc ]; then
+            cp -R SteadyFisheye/ScreenDetector.mlmodelc "$APP/"
+            echo "detector in the bundle: $(du -sh "$APP/ScreenDetector.mlmodelc")"
+          else
+            echo "no detector model — the app falls back to the classical circle detector"
+          fi
       - name: Package unsigned IPA
         script: |
           set -e

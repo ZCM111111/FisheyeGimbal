@@ -126,24 +126,45 @@ D:\Python312\python.exe tools\check_onnx.py
 
 `coremltools` 只有 macOS 版 → 转换放在 Codemagic 构建里做，产物**不进仓库**：
 
+**这里踩了一个大坑**：`coremltools` **没有 ONNX 前端** ✗。
+9.0 和 8.3 的 converter 只有 `tensorflow / torch / sklearn / xgboost / libsvm`
+（把 wheel 拆开看源码确认过，不是配置问题），
+`ct.convert(onnx模型)` 直接报 `Unable to determine the type of the model`。
+
+所以走官方支持的路线：**仓库放 `models/screen.pt`，构建时用 ultralytics 直接导 CoreML**
+（它内部就调 coremltools）：
+
 ```yaml
-- name: Convert the trained detector to CoreML
+- name: Build the CoreML detector (optional)
   script: |
     python3 -m venv "$HOME/mlvenv"
-    "$HOME/mlvenv/bin/pip" install -q coremltools onnx
-    "$HOME/mlvenv/bin/python" tools/onnx_to_coreml.py
+    "$HOME/mlvenv/bin/pip" install -q coremltools "numpy<=2.3.5" torch ultralytics pillow
+    "$HOME/mlvenv/bin/python" tools/make_coreml.py
 ```
 
-`tools/onnx_to_coreml.py` 写出 `SteadyFisheye/ScreenDetector.mlpackage`，
-Xcode 在 Resources 阶段把它编成 `ScreenDetector.mlmodelc` 塞进 bundle。
+从 ultralytics 源码（`engine/exporter.py::export_coreml`）里读出两个关键点，
+Swift 端依赖它们，`tools/make_coreml.py` 会**断言**：
+
+| 参数 | 作用 |
+|---|---|
+| `nms=False` | 导出的是**原始检测头** `(1, 5, 8400)` → Swift 手写解码器直接可用 ✓ |
+| `scale=1/255` | 模型收 0–255 像素、自己归一化 → 和实测 ONNX 需要 0–1 的结论**一致** ✓ |
+
+`make_coreml.py` 还会**跑一张空白图自检输出形状**（不涉及任何素材 ✓）：
+形状不对就放弃这个模型 —— 宁可没有，也不能让 app 拿到一个解码出垃圾的模型 ✗
+
+然后 `xcrun coremlcompiler` 编成 `ScreenDetector.mlmodelc`，
+Codemagic 在 **xcodebuild 之后**把它拷进 `SteadyFisheye.app` ✓
+
+> **为什么不写进 Xcode 工程**：pbxproj 引用一个构建时才生成的文件，
+> 一旦生成失败就是**硬构建失败** ✗。现在这条路失败只打警告、**照样出包**，
+> app 回退到经典检测器 —— 模型是可选件，不是必需件 ✓
 
 app 端 `ScreenDetector.swift` 用 Vision 跑：
 
 - **模型在** → `VNCoreMLRequest`，`.centerCrop`（和训练时的方形裁切一致）
 - **模型不在 / 分数 < 0.15** → **自动回退到经典圆检测器**
-- 检测结果统一成「圆心 + 半径」，两趟对准逻辑完全不用改
-
-模型训练失败、转换失败、删掉模型文件 —— app 都照常能用，只是退回经典检测器。
+- 检测结果统一成「圆心 + 半径」，自动对准逻辑完全不用改
 
 ---
 

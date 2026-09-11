@@ -19,13 +19,19 @@ runs/
 *.cache
 
 # Models are fine (weights only, no footage) — but keep the repository private.
+# Both forms are kept deliberately: the .pt is what the Codemagic build turns
+# into CoreML, and the .onnx is what tools/check_onnx.py and friends measure.
+!models/*.pt
 !models/*.onnx
 !models/*.mlmodel
 
-# The CoreML package is generated from the ONNX during the Codemagic build:
-# coremltools is macOS-only, so it cannot exist in a Windows checkout.
+# The CoreML model is generated from the .pt during the Codemagic build.
+# coremltools has no ONNX frontend and only runs on macOS, so neither the
+# package nor the compiled model can exist in a Windows checkout.
 SteadyFisheye/*.mlpackage/
 SteadyFisheye/*.mlmodelc/
+models/*.mlpackage/
+models/_compiled/
 
 # Local scratch
 icon-sizes.png
