@@ -349,41 +349,58 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let sourceSize = lastSourceSize
         stateLock.unlock()
 
-        let viewSize = view.bounds.size
+        // `view` is weak, so it can already be gone by the time a tap arrives.
+        guard let metalView = view else { return nil }
+        let viewSize = metalView.bounds.size
         guard sourceSize.width > 1, sourceSize.height > 1,
               viewSize.width > 1, viewSize.height > 1 else { return nil }
 
         let parameters = settings.parameters(sourceSize: sourceSize)
-        let halfWidth = Float(viewSize.width) * 0.5
-        let halfHeight = Float(viewSize.height) * 0.5
-        let cornerRadius = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
-        let requested = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta = min(max(parameters.maxTheta - parameters.travel, 0.09), 1.36)
-        let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
-        let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
+        let halfWidth: Float = Float(viewSize.width) * 0.5
+        let halfHeight: Float = Float(viewSize.height) * 0.5
+        let cornerRadius: Float = simd_length(SIMD2<Float>(halfWidth, halfHeight))
 
-        let xy = SIMD2<Float>((Float(point.x) - halfWidth) / focalOut,
-                              (Float(point.y) - halfHeight) / focalOut)
-        let rayLocked = simd_normalize(SIMD3<Float>(xy.x, xy.y, 1))
-        let raySource = simd_normalize(matrix * rayLocked)
-        let theta = acos(min(max(raySource.z, -1), 1))
+        let requested: Float = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
+        let cornerTheta: Float = min(max(parameters.maxTheta - parameters.travel, 0.09), 1.36)
+        let cornerFocal: Float = cornerRadius / max(tan(cornerTheta), 0.001)
+        let focalOut: Float = settings.fillScreen
+            ? max(requested, cornerFocal)
+            : requested
 
-        let radiusModel = parameters.projection < 0.5
-            ? parameters.focal * theta
-            : 2 * parameters.focal * sin(theta * 0.5)
-        let normalized = radiusModel / max(parameters.maxRadius, 0.001)
-        let radius = radiusModel * (1 + parameters.k1 * normalized * normalized
-                                    + parameters.k2 * normalized * normalized
-                                        * normalized * normalized)
+        let pointX: Float = Float(point.x)
+        let pointY: Float = Float(point.y)
+        let xy = SIMD2<Float>((pointX - halfWidth) / focalOut,
+                              (pointY - halfHeight) / focalOut)
 
-        let radial = (raySource.x * raySource.x + raySource.y * raySource.y).squareRoot()
-        let direction = radial > 1e-6
-            ? SIMD2<Float>(raySource.x / radial, raySource.y / radial)
+        // Screen ray -> locked camera ray -> source camera ray.
+        let lockedRay = SIMD3<Float>(xy.x, xy.y, 1)
+        let lockedUnit = lockedRay / simd_length(lockedRay)
+        let sourceRayRaw: SIMD3<Float> = matrix * lockedUnit
+        let sourceRay: SIMD3<Float> = sourceRayRaw / simd_length(sourceRayRaw)
+
+        let cosTheta: Float = min(max(sourceRay.z, -1), 1)
+        let theta: Float = acos(cosTheta)
+
+        let focal: Float = parameters.focal
+        let radiusModel: Float = parameters.projection < 0.5
+            ? focal * theta
+            : 2 * focal * sin(theta * 0.5)
+        let maxRadius: Float = max(parameters.maxRadius, 0.001)
+        let normalized: Float = radiusModel / maxRadius
+        let distortion: Float = 1
+            + parameters.k1 * normalized * normalized
+            + parameters.k2 * normalized * normalized * normalized * normalized
+        let radius: Float = radiusModel * distortion
+
+        let radial: Float = simd_length(SIMD2<Float>(sourceRay.x, sourceRay.y))
+        let direction: SIMD2<Float> = radial > 1e-6
+            ? SIMD2<Float>(sourceRay.x / radial, sourceRay.y / radial)
             : SIMD2<Float>(0, 0)
-        let source = parameters.center + direction * radius
+        let offset: SIMD2<Float> = direction * radius
+        let source: SIMD2<Float> = parameters.center + offset
 
-        let u = source.x / Float(sourceSize.width)
-        let v = source.y / Float(sourceSize.height)
+        let u: Float = source.x / Float(sourceSize.width)
+        let v: Float = source.y / Float(sourceSize.height)
         guard u >= 0, u <= 1, v >= 0, v <= 1 else { return nil }
 
         // The capture connection rotates the buffers into portrait for us, so

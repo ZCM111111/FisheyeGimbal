@@ -175,7 +175,9 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             self.sessionQueue.asyncAfter(deadline: .now() + 1.6) { [weak self] in
                 guard let self, let device = self.activeDevice else { return }
                 guard !self.aeafLockedSnapshot else { return }
-                try? device.lockForConfiguration()
+                // Unlocking a device that was never locked raises an ObjC
+                // exception, so the lock has to be proven first.
+                guard (try? device.lockForConfiguration()) != nil else { return }
                 if device.isFocusModeSupported(.continuousAutoFocus) {
                     device.focusMode = .continuousAutoFocus
                 }
@@ -203,7 +205,7 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         sessionQueue.async { [weak self] in
             guard let self, let device = self.activeDevice else { return }
             self.aeafLockedSnapshot = locked
-            try? device.lockForConfiguration()
+            guard (try? device.lockForConfiguration()) != nil else { return }
             if locked {
                 if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
                 if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
