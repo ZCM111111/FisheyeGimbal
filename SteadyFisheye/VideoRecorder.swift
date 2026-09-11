@@ -302,7 +302,8 @@ final class VideoRecorder: ObservableObject {
                                                                  options: options)
                 } completionHandler: { success, error in
                     DispatchQueue.main.async {
-                        guard let self else { return }
+                        // `self` is already unwrapped and held by the enclosing
+                        // closure, so it must not be bound again here.
                         if success {
                             self.message = "已保存到相册"
                         } else {
