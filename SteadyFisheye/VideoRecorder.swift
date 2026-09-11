@@ -130,9 +130,14 @@ final class VideoRecorder: ObservableObject {
 
     /// Called on the main thread once the GPU has finished drawing into the
     /// buffer, so the encoder only ever sees completed frames.
-    func append(_ buffer: CVPixelBuffer, at time: CMTime) {
+    ///
+    /// Takes plain seconds rather than a `CMTime` so callers outside the
+    /// AVFoundation world — the Metal renderer — do not have to import CoreMedia.
+    func append(_ buffer: CVPixelBuffer, atSeconds seconds: Double) {
         guard isRecording, let writer = writer, let input = videoInput,
               let adaptor = adaptor else { return }
+        guard seconds.isFinite, seconds > 0 else { return }
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
         if sessionStart == nil {
             sessionStart = time
             writer.startSession(atSourceTime: .zero)

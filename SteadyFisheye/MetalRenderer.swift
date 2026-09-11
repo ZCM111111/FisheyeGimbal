@@ -362,9 +362,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // buffer reference is what keeps the IOSurface alive.
             withExtendedLifetime(cvTexture) {
                 guard let recorder = recorder else { return }
-                let time = CMTime(seconds: timestamp, preferredTimescale: 600)
                 DispatchQueue.main.async {
-                    recorder.append(pixelBuffer, at: time)
+                    recorder.append(pixelBuffer, atSeconds: timestamp)
                 }
             }
         }
