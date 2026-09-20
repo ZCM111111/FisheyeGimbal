@@ -52,16 +52,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let frameLock = NSLock()
     private var latestFrame: SourceFrame?
 
-    /// Set by the view so the corrected frame can also be written to a file.
-    var recorder: VideoRecorder?
-
     private weak var view: MTKView?
     private var lastFrameTimestamp: Double = 0
     private var cameraFPS: Double = 0
     private var lastHUDTime: Double = 0
 
     @Published private(set) var inputSize = CGSize.zero
-    @Published private(set) var cameraFPSText = "相机 --"
+    @Published private(set) var cameraFPSText = "camera --"
 
     enum RendererError: Error {
         case noMetal
@@ -219,13 +216,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return (texture, wrapper)
     }
 
-    /// Size the next recording should use, matched to the current preview so
-    /// the file has the same framing the user sees.
-    func preferredRecordingSize() -> CGSize {
-        let size = view?.drawableSize ?? CGSize(width: 1080, height: 1920)
-        return VideoRecorder.fittedSize(for: size)
-    }
-
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
@@ -263,14 +253,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             withExtendedLifetime(frame) {}
         }
         commandBuffer.present(drawable)
-        // Recording frames are only handed over once the GPU is done writing
-        // them, which is what the completion handler below guarantees.
-        renderRecordingFrameIfNeeded(after: commandBuffer, frame: frame)
         commandBuffer.commit()
 
         updateHUD(sourceSize: CGSize(width: CGFloat(frame.size.x),
-                                      height: CGFloat(frame.size.y)),
-                  viewSize: drawableSize)
+                                      height: CGFloat(frame.size.y)))
     }
 
     private func makeUniforms(frame: SourceFrame, viewSize: CGSize) -> FEUniforms {
@@ -279,10 +265,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let snapshot = motion.renderSnapshot(forFrameAt: frame.timestamp)
         let matrix = snapshot.valid ? snapshot.cameraFromLocked : matrix_identity_float3x3
         let columns = matrix.columns
-        stateLock.lock()
-        lastMatrix = matrix
-        lastSourceSize = CGSize(width: CGFloat(frame.size.x), height: CGFloat(frame.size.y))
-        stateLock.unlock()
 
         return FEUniforms(
             rotation0: SIMD4<Float>(columns.0, 0),
@@ -298,242 +280,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                      Float(frame.format), parameters.sharpness),
             finishing: SIMD4<Float>(parameters.localContrast,
                                    parameters.hazeCompensation,
-                                   settings.fillScreen ? 1 : 0,
-                                   0)
+                                   settings.fillScreen ? 1 : 0, 0)
         )
     }
 
-    /// Draws the same corrected frame once more, this time into an
-    /// IOSurface-backed pixel buffer the encoder can consume directly.
-    ///
-    /// The point of rendering rather than recording the camera feed is that the
-    /// file contains the undistorted, stabilised picture — the whole reason the
-    /// app exists — instead of the raw fisheye.
-    private func renderRecordingFrameIfNeeded(after commandBuffer: MTLCommandBuffer,
-                                              frame: SourceFrame) {
-        guard let recorder = recorder, recorder.isRecording,
-              let pixelBuffer = recorder.makePixelBuffer() else { return }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        guard width > 0, height > 0 else { return }
-
-        var wrapped: CVMetalTexture?
-        guard CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
-                                                        textureCache,
-                                                        pixelBuffer,
-                                                        nil,
-                                                        .bgra8Unorm,
-                                                        width,
-                                                        height,
-                                                        0,
-                                                        &wrapped) == kCVReturnSuccess,
-              let cvTexture = wrapped,
-              let texture = CVMetalTextureGetTexture(cvTexture) else { return }
-
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
-            return
-        }
-        var uniforms = makeUniforms(frame: frame,
-                                    viewSize: CGSize(width: width, height: height))
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setVertexBytes(&uniforms, length: MemoryLayout<FEUniforms>.stride, index: 0)
-        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<FEUniforms>.stride, index: 0)
-        encoder.setFragmentTexture(frame.textures[0], index: 0)
-        encoder.setFragmentTexture(frame.textures.count > 1 ? frame.textures[1] : frame.textures[0],
-                                   index: 1)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        encoder.endEncoding()
-
-        let timestamp = frame.timestamp
-        commandBuffer.addCompletedHandler { [weak recorder] _ in
-            // The texture wrapper has to outlive the GPU work, and the pixel
-            // buffer reference is what keeps the IOSurface alive.
-            withExtendedLifetime(cvTexture) {
-                guard let recorder = recorder else { return }
-                DispatchQueue.main.async {
-                    recorder.append(pixelBuffer, atSeconds: timestamp)
-                }
-            }
-        }
-    }
-
-    /// How much of the lens circle the corners of the screen reach, as a
-    /// percentage. This is the calibration readout: push it toward 100% to use
-    /// the whole picture, and the moment it passes 100% black corners appear
-    /// because the model is sampling past the real image circle.
-    var coverageHandler: ((Float) -> Void)?
-
-    /// Pose and frame size from the most recent draw, shared with the tap
-    /// handler so a preview point can be traced back to the sensor.
-    private let stateLock = NSLock()
-    private var lastMatrix = matrix_identity_float3x3
-    private var lastSourceSize = CGSize.zero
-
-    private func updateHUD(sourceSize: CGSize, viewSize: CGSize) {
+    private func updateHUD(sourceSize: CGSize) {
         let now = CACurrentMediaTime()
         guard now - lastHUDTime > 0.25 else { return }
         lastHUDTime = now
         let fps = Int(cameraFPS.rounded())
-        let coverage = coveragePercent(sourceSize: sourceSize, viewSize: viewSize)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.inputSize = sourceSize
-            self.cameraFPSText = "相机 \(fps) 帧"
-            self.coverageHandler?(coverage)
+            self.cameraFPSText = "camera \(fps) fps"
         }
-    }
-
-    /// Where a source pixel currently appears on screen.
-    ///
-    /// The inverse of `devicePoint(forViewPoint:)`, used to show what the
-    /// cabinet detector actually locked onto instead of guessing.
-    func viewPoint(forSourcePixel pixel: SIMD2<Float>, sourceSize: CGSize) -> CGPoint? {
-        stateLock.lock()
-        let matrix = lastMatrix
-        stateLock.unlock()
-
-        guard let metalView = view else { return nil }
-        let viewSize = metalView.bounds.size
-        guard sourceSize.width > 1, sourceSize.height > 1,
-              viewSize.width > 1, viewSize.height > 1 else { return nil }
-
-        guard let direction = settings.cameraDirection(forSourcePixel: pixel,
-                                                       sourceSize: sourceSize) else {
-            return nil
-        }
-        // Locked-frame ray, then the pinhole output.
-        let cameraRay = matrix.inverse * direction
-        guard cameraRay.z > 0.05 else { return nil }
-        let parameters = settings.parameters(sourceSize: sourceSize)
-        let halfWidth = Float(viewSize.width) * 0.5
-        let halfHeight = Float(viewSize.height) * 0.5
-        let cornerRadius = simd_length(SIMD2<Float>(halfWidth, halfHeight))
-        let requested = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta = min(parameters.maxTheta, 1.36)
-        let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
-        let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
-
-        let xy = SIMD2<Float>(cameraRay.x, cameraRay.y) / cameraRay.z * focalOut
-        let point = CGPoint(x: CGFloat(halfWidth + xy.x), y: CGFloat(halfHeight + xy.y))
-        guard point.x.isFinite, point.y.isFinite else { return nil }
-        return point
-    }
-
-    /// Angle of the frame's corner ray in the pinhole output, mirroring the
-    /// shader's focal choice.
-    private func cornerAngle(parameters: FisheyeParameters, viewSize: CGSize) -> Float {
-        guard viewSize.width > 1, viewSize.height > 1 else { return 0 }
-        let halfWidth = Float(viewSize.width) * 0.5
-        let halfHeight = Float(viewSize.height) * 0.5
-        let cornerRadius = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
-        let requested = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta = min(parameters.maxTheta, 1.36)
-        let cornerFocal = cornerRadius / max(tan(cornerTheta), 0.001)
-        let focalOut = settings.fillScreen ? max(requested, cornerFocal) : requested
-        return atan(cornerRadius / max(focalOut, 0.001))
-    }
-
-    /// Maps a point on the corrected preview back to the sensor's normalised
-    /// coordinate space, which is what the focus and exposure APIs expect.
-    ///
-    /// This is not a coordinate flip. The preview has been undistorted and then
-    /// rotated by the lock, so the point has to travel back through all of it:
-    /// screen pixel -> pinhole ray -> un-rotate the lock -> lens model ->
-    /// source pixel -> sensor. Feeding a raw screen point to
-    /// `focusPointOfInterest` would focus somewhere else entirely.
-    func devicePoint(forViewPoint point: CGPoint) -> CGPoint? {
-        stateLock.lock()
-        let matrix = lastMatrix
-        let sourceSize = lastSourceSize
-        stateLock.unlock()
-
-        // `view` is weak, so it can already be gone by the time a tap arrives.
-        guard let metalView = view else { return nil }
-        let viewSize = metalView.bounds.size
-        guard sourceSize.width > 1, sourceSize.height > 1,
-              viewSize.width > 1, viewSize.height > 1 else { return nil }
-
-        let parameters = settings.parameters(sourceSize: sourceSize)
-        let halfWidth: Float = Float(viewSize.width) * 0.5
-        let halfHeight: Float = Float(viewSize.height) * 0.5
-        let cornerRadius: Float = simd_length(SIMD2<Float>(halfWidth, halfHeight))
-
-        let requested: Float = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta: Float = min(parameters.maxTheta, 1.36)
-        let cornerFocal: Float = cornerRadius / max(tan(cornerTheta), 0.001)
-        let focalOut: Float = settings.fillScreen
-            ? max(requested, cornerFocal)
-            : requested
-
-        let pointX: Float = Float(point.x)
-        let pointY: Float = Float(point.y)
-        let xy = SIMD2<Float>((pointX - halfWidth) / focalOut,
-                              (pointY - halfHeight) / focalOut)
-
-        // Screen ray -> locked camera ray -> source camera ray.
-        let lockedRay = SIMD3<Float>(xy.x, xy.y, 1)
-        let lockedUnit = lockedRay / simd_length(lockedRay)
-        let sourceRayRaw: SIMD3<Float> = matrix * lockedUnit
-        let sourceRay: SIMD3<Float> = sourceRayRaw / simd_length(sourceRayRaw)
-
-        let cosTheta: Float = min(max(sourceRay.z, -1), 1)
-        let theta: Float = acos(cosTheta)
-
-        let focal: Float = parameters.focal
-        let radiusModel: Float = parameters.projection < 0.5
-            ? focal * theta
-            : 2 * focal * sin(theta * 0.5)
-        let maxRadius: Float = max(parameters.maxRadius, 0.001)
-        let normalized: Float = radiusModel / maxRadius
-        let distortion: Float = 1
-            + parameters.k1 * normalized * normalized
-            + parameters.k2 * normalized * normalized * normalized * normalized
-        let radius: Float = radiusModel * distortion
-
-        let radial: Float = simd_length(SIMD2<Float>(sourceRay.x, sourceRay.y))
-        let direction: SIMD2<Float> = radial > 1e-6
-            ? SIMD2<Float>(sourceRay.x / radial, sourceRay.y / radial)
-            : SIMD2<Float>(0, 0)
-        let offset: SIMD2<Float> = direction * radius
-        let source: SIMD2<Float> = parameters.center + offset
-
-        let u: Float = source.x / Float(sourceSize.width)
-        let v: Float = source.y / Float(sourceSize.height)
-        guard u >= 0, u <= 1, v >= 0, v <= 1 else { return nil }
-
-        // The capture connection rotates the buffers into portrait for us, so
-        // undo that rotation to land in the sensor's own landscape space:
-        // device x comes from the buffer's y, device y from the buffer's x.
-        if sourceSize.height >= sourceSize.width {
-            return CGPoint(x: CGFloat(v), y: CGFloat(1 - u))
-        }
-        return CGPoint(x: CGFloat(u), y: CGFloat(v))
-    }
-
-    /// Mirrors the focal choice in the fragment shader so the panel can show
-    /// the same number the GPU is using.
-    private func coveragePercent(sourceSize: CGSize, viewSize: CGSize) -> Float {
-        let parameters = settings.parameters(sourceSize: sourceSize)
-        guard viewSize.width > 1, viewSize.height > 1 else { return 0 }
-
-        let halfWidth = Float(viewSize.width) * 0.5
-        let halfHeight = Float(viewSize.height) * 0.5
-        let maxTheta = max(parameters.maxTheta, 0.01)
-        let requestedFocal = halfWidth / max(tan(parameters.outputFov * 0.5), 0.001)
-        let cornerTheta = min(maxTheta, 1.36)
-        let cornerFocal = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
-            / max(tan(cornerTheta), 0.001)
-        let focalOut = settings.fillScreen ? max(requestedFocal, cornerFocal) : requestedFocal
-
-        let cornerRadius = (halfWidth * halfWidth + halfHeight * halfHeight).squareRoot()
-        let thetaCorner = atan(cornerRadius / max(focalOut, 0.001))
-        return min(thetaCorner / maxTheta, 2.0) * 100
     }
 }

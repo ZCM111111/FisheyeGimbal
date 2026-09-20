@@ -22,17 +22,12 @@ final class MotionStabilizer: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case hold
         case follow
-        /// Roll-only stabilisation referenced to gravity, the way a 360
-        /// camera's horizon lock behaves: the horizon stays level while yaw
-        /// and pitch follow the phone freely.
-        case horizon
 
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .hold: return "锁定"
-            case .follow: return "跟随"
-            case .horizon: return "地平线"
+            case .hold: return "Hold"
+            case .follow: return "Follow"
             }
         }
     }
@@ -40,11 +35,7 @@ final class MotionStabilizer: ObservableObject {
     @Published private(set) var available = false
     @Published private(set) var locked = false
     @Published private(set) var mode: Mode = .hold
-    @Published private(set) var status = "等待陀螺仪"
-    /// How far the phone is rolled away from level, in degrees. Derived from
-    /// gravity continuously, never latched from a button, so it is always the
-    /// live reference rather than a stale snapshot.
-    @Published private(set) var horizonTilt: Float = 0
+    @Published private(set) var status = "Waiting for motion"
 
     private let manager = CMMotionManager()
     private let motionQueue: OperationQueue = {
@@ -57,32 +48,6 @@ final class MotionStabilizer: ObservableObject {
     private let lock = NSLock()
 
     private var latest = MotionSnapshot()
-    /// The un-smoothed attitude of the most recent sample. Automatic centring
-    /// turns its target into a world direction with this one: using the filtered
-    /// attitude would bake the low pass's lag into the aim and make the picture
-    /// flinch every time the detector refreshed.
-    private var rawAttitude = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
-    /// Where the frame should end up centred, in world coordinates. Set by the
-    /// detector, chased once per motion sample.
-    private var aimTargetWorld: SIMD3<Float>?
-    /// Time constant of that chase, in seconds.
-    ///
-    /// It is a chase only in the smallest sense: the detector reports where the
-    /// cabinet is and the lock is set there at once, because easing toward a
-    /// target makes the frame trail the phone while it turns. The holding is the
-    /// world lock's job — that is what keeps the subject pinned in the picture
-    /// while everything else moves.
-    var aimSmoothing: Double = 0.03
-    /// Recent raw attitudes, so a detection can be turned into a world direction
-    /// using the pose of the frame it came from rather than the pose of now.
-    private var attitudeHistory: [(time: TimeInterval, attitude: simd_quatf)] = []
-    /// Stop correcting inside this angle. Small: the point is to have the target
-    /// pinned in the middle, and the chase already filters the detector's
-    /// frame-to-frame wobble.
-    private let aimDeadZone: Float = 0.0004
-    /// Device turn rate in degrees per second, recomputed per motion sample.
-    private var angularRateDegrees: Float = 0
-    private var hasRate = false
     private var samples: [MotionSample] = []
     private let maxSampleCount = 36
     private var filtered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
@@ -97,15 +62,7 @@ final class MotionStabilizer: ObservableObject {
     private var renderVersion: UInt64 = 0
     private var lastRenderedSampleTime: TimeInterval = 0
     private var hasRenderedSample = false
-    /// No post-hoc smoothing by default: any smoothing applied to the
-    /// correction signal is a residual error, and leaving small fast shake
-    /// uncorrected is exactly the bug this default removes.
-    private var displaySmoothingValue: Double = 0
-    private var gravityFiltered = SIMD3<Float>(0, -1, 0)
-    private var hasGravity = false
-    private var horizonQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1))
-    private var horizonTiltValue: Float = 0
-    private var lastHorizonPublish: TimeInterval = 0
+    private var displaySmoothingValue: Double = 0.035
     private var activeStatusPublished = false
 
     // Camera coordinates are +X right, +Y down, +Z out through the back camera.
@@ -115,15 +72,6 @@ final class MotionStabilizer: ObservableObject {
         SIMD3<Float>(0, -1, 0),
         SIMD3<Float>(0, 0, -1)
     ))
-
-    /// Restores the mode the user last chose, so a launch does not silently
-    /// drop back to the default stabilisation.
-    init() {
-        if let raw = SettingsStore.loadStabilizerMode(), let saved = Mode(rawValue: raw) {
-            modeValue = saved
-            mode = saved
-        }
-    }
 
     var smoothing: Double {
         get {
@@ -214,99 +162,14 @@ final class MotionStabilizer: ObservableObject {
         return result
     }
 
-    /// The attitude to latch when the lock is established or re-centred: the
-    /// same pointing direction the phone has right now, but with the roll taken
-    /// from gravity instead of from the hand.
-    ///
-    /// Latching the raw attitude bakes in whatever tilt the phone happens to
-    /// have at that instant, so pressing re-centre (or simply starting the app)
-    /// while holding the phone crooked leaves the picture permanently crooked.
-    /// Re-centring should only choose *where* you are looking, never how level
-    /// the horizon is.
-    ///
-    /// Must be called with `lock` held.
-    private func levelLockedAttitude(from attitude: simd_quatf) -> simd_quatf {
-        levelLockedAttitude(from: attitude, cameraDirection: nil)
-    }
-
-    private func levelLockedAttitude(from attitude: simd_quatf,
-                                     cameraDirection: SIMD3<Float>?) -> simd_quatf {
-        let gravityWorld = attitude.act(gravityFiltered)
-        let gravityLength = simd_length(gravityWorld)
-        guard gravityLength > 0.05, hasGravity else { return attitude }
-        let vertical = gravityWorld / gravityLength
-
-        let cameraToWorld = simd_float3x3(attitude) * cameraToDevice
-        // Camera coordinates are +X right, +Y down, +Z along the optical axis,
-        // and `cameraToWorld` already carries the camera-to-device flip — so the
-        // aim vector must go through it exactly once, the same way the plain
-        // optical axis does.
-        //
-        // It used to be multiplied by `cameraToDevice` an extra time, which
-        // cancels the flip and reads a camera-frame ray as a device-frame one:
-        // straight ahead (0, 0, 1) then meant "at the user", so the lock ended up
-        // aimed roughly backwards, the renderer sampled past the lens rim and
-        // pinned every pixel to it, and the frame smeared into radial streaks
-        // the moment anything was detected. The axis-only path never had the
-        // error, which is why the preview looked normal until then.
-        var forward = cameraToWorld * (cameraDirection ?? SIMD3<Float>(0, 0, 1))
-        let forwardLength = simd_length(forward)
-        guard forwardLength > 0.05 else { return attitude }
-        forward /= forwardLength
-
-        // The horizon is level exactly when the camera's right axis has no
-        // vertical component, and the basis also has to stay orthogonal to the
-        // optical axis. A cross product satisfies both at once; projecting out
-        // the vertical component alone would leave a skewed, non-rotational
-        // basis, and converting that to a quaternion is meaningless.
-        let cameraRight = cameraToWorld * SIMD3<Float>(1, 0, 0)
-        var right = simd_cross(forward, vertical)
-        let rightLength = simd_length(right)
-        // Pointing straight down or up leaves roll undefined; keep the attitude.
-        guard rightLength > 0.15 else { return attitude }
-        right /= rightLength
-        // Keep the picture the right way round instead of mirrored.
-        if simd_dot(right, cameraRight) < 0 { right = -right }
-
-        // Camera basis is right / down / forward, and X cross Y equals Z.
-        let down = simd_cross(forward, right)
-        let lockedCameraToWorld = simd_float3x3(columns: (right, down, forward))
-        let lockedDeviceToWorld = lockedCameraToWorld * cameraToDevice
-        return simd_quatf(lockedDeviceToWorld)
-    }
-
-    /// Roll-only correction taken straight from gravity, the way a 360 camera
-    /// holds its horizon: yaw and pitch stay free, the horizon stays level.
-    /// Nothing is latched here, which is what makes it work even when the
-    /// phone is already tilted before the mode is selected.
-    ///
-    /// Must be called with `lock` held.
-    private func horizonCorrection() -> simd_quatf {
-        // Gravity in camera coordinates: +X right, +Y down, +Z out the back.
-        let g = cameraToDevice * gravityFiltered
-        let planar = (g.x * g.x + g.y * g.y).squareRoot()
-        // Roll is undefined when the optical axis points at the ground or the
-        // sky, so hold the previous correction rather than snapping wildly.
-        guard planar > 0.2 else { return horizonQuaternion }
-
-        // Pick the angle that rotates gravity exactly onto the image "down"
-        // axis, which is what puts the horizon level.
-        let theta = atan2(-g.x, g.y)
-        horizonTiltValue = theta * 180 / Float.pi
-        // Rolling about the camera's optical axis is a rotation about -Z in
-        // the Core Motion device frame.
-        horizonQuaternion = simd_quatf(angle: -theta, axis: SIMD3<Float>(0, 0, 1))
-        return horizonQuaternion
-    }
-
     func start() {
         guard manager.isDeviceMotionAvailable else {
-            publishAvailability(false, status: "设备不支持陀螺仪数据")
+            publishAvailability(false, status: "Device motion unavailable")
             return
         }
 
         manager.deviceMotionUpdateInterval = 1.0 / 120.0
-        publishAvailability(true, status: "正在启动陀螺仪")
+        publishAvailability(true, status: "Starting motion")
         manager.startDeviceMotionUpdates(using: .xArbitraryZVertical,
                                          to: motionQueue) { [weak self] motion, error in
             guard let self else { return }
@@ -329,30 +192,17 @@ final class MotionStabilizer: ObservableObject {
         renderVersion = 0
         hasRenderedSample = false
         lastRenderedSampleTime = 0
-        gravityFiltered = SIMD3<Float>(0, -1, 0)
-        hasGravity = false
-        horizonQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1))
-        horizonTiltValue = 0
-        lastHorizonPublish = 0
         activeStatusPublished = false
         hasSample = false
         lastTimestamp = 0
         lock.unlock()
-        publishAvailability(false, status: "陀螺仪已停止")
+        publishAvailability(false, status: "Motion stopped")
     }
 
     func recenter() {
         lock.lock()
-        // Horizon mode is referenced to gravity every sample, so latching the
-        // current attitude would bake in whatever tilt the phone happens to
-        // have and leave the image permanently crooked. Ignore it there.
-        guard modeValue != .horizon else {
-            lock.unlock()
-            return
-        }
         if hasSample {
-            // Level-latched: re-centring chooses the pointing direction only.
-            lockedQuaternion = levelLockedAttitude(from: filtered)
+            lockedQuaternion = filtered
             lockVersion &+= 1
             let identity = identityQuaternion()
             latest.relativeDeviceQuaternion = identity
@@ -371,128 +221,11 @@ final class MotionStabilizer: ObservableObject {
         lock.unlock()
     }
 
-    /// Re-aims the lock so a direction seen off-axis becomes the centre of the
-    /// frame, with the horizon kept level.
-    ///
-    /// This is the live equivalent of dragging a viewport back to the middle in
-    /// post production: one rotation assignment instead of keyframes.
-    func reLock(lookingAlong cameraDirection: SIMD3<Float>) {
+    func setMode(_ newMode: Mode) {
         lock.lock()
-        defer { lock.unlock() }
-        guard hasSample, simd_length(cameraDirection) > 0.01 else { return }
-        lockedQuaternion = levelLockedAttitude(from: filtered,
-                                               cameraDirection: cameraDirection)
-        lockVersion &+= 1
-        let identity = identityQuaternion()
-        latest.relativeDeviceQuaternion = identity
-        latest.cameraFromLocked = matrix_identity_float3x3
-        latest.lockVersion = lockVersion
-        latest.valid = true
-        samples.removeAll(keepingCapacity: true)
-        samples.append(MotionSample(timestamp: lastTimestamp,
-                                    quaternion: identity,
-                                    lockVersion: lockVersion))
-        renderQuaternion = identity
-        renderVersion = lockVersion
-        lastRenderedSampleTime = lastTimestamp
-        hasRenderedSample = true
-    }
-
-    /// How fast the device is turning, in degrees per second.
-    ///
-    /// The screen detector works on a frame that is already tens of milliseconds
-    /// old, so while the phone is being turned its answer describes a pose that
-    /// has moved on. Using it would tug the picture sideways and then tug it back
-    /// on the next detection — the drag that reads as a spring instead of a lock.
-    func currentAngularRate() -> Float {
-        lock.lock()
-        defer { lock.unlock() }
-        return angularRateDegrees
-    }
-
-    /// True once something has been locked onto.
-    var hasAimTarget: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return aimTargetWorld != nil
-    }
-
-    /// Where the frame should be centred, in camera coordinates. Pass nil to
-    /// stop chasing anything.
-    ///
-    /// The direction is converted to a world direction once, here, and the glide
-    /// then runs per motion sample inside the update loop. Re-aiming the lock on
-    /// the detector's own timer is what made the picture jerk: the correction
-    /// arrived in detector-sized steps, and each one re-derived the lock from the
-    /// smoothed attitude, so it also carried that filter's lag.
-    func setAimTarget(cameraDirection: SIMD3<Float>?,
-                      smoothing: Double? = nil,
-                      capturedAt time: TimeInterval? = nil) {
-        lock.lock()
-        defer { lock.unlock() }
-        if let smoothing = smoothing {
-            // Set under the lock: the motion queue reads it on every sample.
-            aimSmoothing = min(max(smoothing, 0.05), 5)
-        }
-        guard let direction = cameraDirection, hasSample,
-              simd_length(direction) > 0.01 else {
-            aimTargetWorld = nil
-            return
-        }
-        // The pose of the frame the detector looked at. Using the present pose
-        // instead reads the cabinet as a couple of degrees off during any real
-        // turn — at 60°/s the detector's frame is already 40 ms old — and the
-        // next detection then corrects that error back, which is what a tug of
-        // war looks like on screen.
-        let pose = time.flatMap { attitude(at: $0) } ?? rawAttitude
-        aimTargetWorld = simd_normalize(simd_float3x3(pose) * (cameraToDevice * direction))
-    }
-
-    /// The raw attitude from a short history, nearest sample.
-    ///
-    /// Must be called with `lock` held. Nearest is enough: samples arrive about
-    /// every 10 ms, so even at a fast turn the residual is a fraction of a
-    /// degree, and a clock that does not line up simply falls back to the newest.
-    private func attitude(at time: TimeInterval) -> simd_quatf? {
-        guard let newest = attitudeHistory.last else { return nil }
-        guard abs(newest.time - time) < 0.5 else { return newest.attitude }
-        var best = newest
-        var bestDelta = abs(newest.time - time)
-        for entry in attitudeHistory {
-            let delta = abs(entry.time - time)
-            if delta < bestDelta {
-                best = entry
-                bestDelta = delta
-            }
-        }
-        return best.attitude
-    }
-
-    /// Where the lock is pointing right now, expressed in the current camera
-    /// frame.
-    ///
-    /// Snapping the lock onto a new direction every time makes the picture jump,
-    /// so the automatic search glides instead: each pass nudges the lock a
-    /// fraction of the way toward its target, which needs to know how far apart
-    /// the two currently are.
-    func lockedCameraDirection() -> SIMD3<Float>? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard hasSample else { return nil }
-        // The lock is a device-to-world attitude, so its forward axis is the
-        // camera axis written in device coordinates.
-        let worldForward = simd_float3x3(lockedQuaternion)
-            * (cameraToDevice * SIMD3<Float>(0, 0, 1))
-        let relative = simd_float3x3(filtered).inverse * worldForward
-        return cameraToDevice * relative
-    }
-
-    func setMode(_ newMode: Mode) {        lock.lock()
         modeValue = newMode
-        SettingsStore.saveStabilizerMode(newMode.rawValue)
         if hasSample {
-            // Level-latched: re-centring chooses the pointing direction only.
-            lockedQuaternion = levelLockedAttitude(from: filtered)
+            lockedQuaternion = filtered
             lockVersion &+= 1
             let identity = identityQuaternion()
             latest.relativeDeviceQuaternion = identity
@@ -520,106 +253,30 @@ final class MotionStabilizer: ObservableObject {
                                   iz: Float(attitude.z),
                                   r: Float(attitude.w))
         let timestamp = deviceMotion.timestamp
-        let gravity = SIMD3<Float>(Float(deviceMotion.gravity.x),
-                                   Float(deviceMotion.gravity.y),
-                                   Float(deviceMotion.gravity.z))
 
         lock.lock()
         if !hasSample {
             hasSample = true
             filtered = current
-            // Seed gravity before latching, so the very first lock is level too.
-            gravityFiltered = gravity
-            hasGravity = true
-            lockedQuaternion = levelLockedAttitude(from: current)
+            lockedQuaternion = current
             lastTimestamp = timestamp
         }
 
         let dt = min(max(timestamp - lastTimestamp, 1.0 / 240.0), 0.25)
         lastTimestamp = timestamp
-        // Turn rate is measured here, before rawAttitude moves on: 2·acos of the
-        // quaternion dot is the angle between the two attitudes.
-        if hasRate {
-            let delta = simd_dot(current.vector, rawAttitude.vector)
-            let turned = 2 * acos(min(abs(delta), 1))          // radians, Float
-            angularRateDegrees = turned / Float(dt) * 180 / .pi
-        }
-        hasRate = true
-        rawAttitude = current
-        attitudeHistory.append((time: timestamp, attitude: current))
-        if attitudeHistory.count > 90 {
-            attitudeHistory.removeFirst(attitudeHistory.count - 90)
-        }
         let alpha = smoothingValue <= 0 ? 1 : 1 - exp(-dt / smoothingValue)
         filtered = slerpShortest(filtered, current,
                                  amount: Float(min(max(alpha, 0), 1)))
 
-        // Gravity is a reference direction rather than a rate, so gently
-        // smoothing it removes accelerometer noise without the horizon ever
-        // lagging behind the phone.
-        if !hasGravity {
-            gravityFiltered = gravity
-            hasGravity = true
-        }
-        let gravityAlpha = Float(1 - exp(-dt / 0.06))
-        gravityFiltered += (gravity - gravityFiltered) * gravityAlpha
-        let gravityLength = simd_length(gravityFiltered)
-        if gravityLength > 0.001 {
-            gravityFiltered /= gravityLength
-        }
-
-        // Follow mode eases the lock toward the smoothed attitude, which is a
-        // spring by design. While something is being aimed at, that spring is a
-        // second opinion about where to point, and the two fight: the picture
-        // creeps away with the hand, then the next detection yanks it back. So
-        // the aim wins outright — an aim target is an instruction, not a vote.
-        if modeValue == .follow, aimTargetWorld == nil {
+        if modeValue == .follow {
             let beta = 1 - exp(-dt / max(dampingValue, 0.15))
             lockedQuaternion = slerpShortest(lockedQuaternion, filtered,
                                              amount: Float(min(max(beta, 0), 1)))
         }
 
-        // Automatic centring, eased here rather than on the detector's timer.
-        //
-        // This runs once per motion sample, so a target the detector refreshes
-        // five times a second still moves the picture in hundred-hertz steps:
-        // one continuous glide instead of five visible jerks. The lock is
-        // adjusted in place, with no version bump and no sample history cleared,
-        // so nothing downstream treats the change as a discontinuity.
-        if modeValue != .horizon, let target = aimTargetWorld {
-            let deviceForward = cameraToDevice * SIMD3<Float>(0, 0, 1)
-            let worldForward = simd_float3x3(lockedQuaternion) * deviceForward
-            let alignment = min(max(simd_dot(worldForward, target), -1), 1)
-            if alignment < cos(aimDeadZone) {
-                let amount = Float(min(max(1 - exp(-dt / max(aimSmoothing, 0.05)), 0), 1))
-                let blended = simd_normalize(worldForward * (1 - amount) + target * amount)
-                // Both levelLockedAttitude and cameraDirection work in the camera
-                // frame of the current pose, so the world direction goes back
-                // through the raw attitude — the same one the picture is built
-                // from, not the smoothed one.
-                let cameraFromWorld = cameraToDevice * simd_float3x3(current).inverse
-                lockedQuaternion = levelLockedAttitude(from: current,
-                                                      cameraDirection: cameraFromWorld * blended)
-            }
-        }
-
-        // The correction has to be built from the RAW attitude. Using the
-        // smoothed attitude as the base cancels only the slow component of the
-        // motion: with R = q_filtered^-1 * q_locked the direction seen at an
-        // output pixel works out to e(t) * constant, where e(t) is exactly the
-        // high-frequency part the low pass removed. That left small, fast hand
-        // shake completely uncorrected while slow pans looked stabilised.
-        // Raw attitude gives R = q_true^-1 * q_locked and a world-locked image.
-        let relativeDeviceQuaternion: simd_quatf
-        switch modeValue {
-        case .hold, .follow:
-            // qCurrent^-1 * qLocked maps a ray in the locked device frame into
-            // the current device frame. Built from the raw attitude so every
-            // movement, small or large, is corrected in full.
-            relativeDeviceQuaternion = current.inverse * lockedQuaternion
-        case .horizon:
-            relativeDeviceQuaternion = horizonCorrection()
-        }
+        // qCurrent^-1 * qLocked maps a ray in the locked device frame into
+        // the current device frame. The basis conversion wraps camera pixels.
+        let relativeDeviceQuaternion = filtered.inverse * lockedQuaternion
         let relativeDevice = simd_float3x3(relativeDeviceQuaternion)
         let relativeCamera = cameraToDevice * relativeDevice * cameraToDevice
         latest.cameraFromLocked = relativeCamera
@@ -633,18 +290,7 @@ final class MotionStabilizer: ObservableObject {
         if samples.count > maxSampleCount {
             samples.removeFirst(samples.count - maxSampleCount)
         }
-        let tiltToPublish: Float? = modeValue == .horizon ? horizonTiltValue : nil
-        let tiltIsDue = timestamp - lastHorizonPublish > 0.08
-        if tiltIsDue {
-            lastHorizonPublish = timestamp
-        }
         lock.unlock()
-
-        if let tiltToPublish = tiltToPublish, tiltIsDue {
-            DispatchQueue.main.async { [weak self] in
-                self?.horizonTilt = tiltToPublish
-            }
-        }
 
         lock.lock()
         let shouldPublishActive = !activeStatusPublished
@@ -653,7 +299,7 @@ final class MotionStabilizer: ObservableObject {
         if shouldPublishActive {
             DispatchQueue.main.async { [weak self] in
                 self?.locked = true
-                self?.status = "陀螺仪工作中"
+                self?.status = "Motion active"
             }
         }
     }
