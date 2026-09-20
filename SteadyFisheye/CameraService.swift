@@ -1,14 +1,10 @@
 import AVFoundation
 import Combine
-import CoreImage
 import CoreMedia
 import CoreVideo
 import QuartzCore
 
-final class CameraService: NSObject, ObservableObject,
-                           AVCaptureVideoDataOutputSampleBufferDelegate,
-                           AVCaptureAudioDataOutputSampleBufferDelegate {
-
+final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     enum Lens: String, CaseIterable, Identifiable {
         case wide
         case ultraWide
@@ -16,8 +12,8 @@ final class CameraService: NSObject, ObservableObject,
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .wide: return "1x 主摄"
-            case .ultraWide: return "0.5x 超广角"
+            case .wide: return "1x"
+            case .ultraWide: return "0.5x"
             }
         }
 
@@ -31,171 +27,20 @@ final class CameraService: NSObject, ObservableObject,
 
     let session = AVCaptureSession()
 
-    /// Settings the asset writer needs for the microphone, or nil when there is
-    /// no usable audio input. Backed by `audioSettings`, which is written once
-    /// during configuration on the session queue.
-    var audioWriterSettings: [String: Any]? { audioSettings }
-
-    /// Delivers captured audio to the recorder.
-    var onAudioSample: ((CMSampleBuffer) -> Void)?
-
     @Published private(set) var running = false
     @Published private(set) var lens: Lens = .ultraWide
-    @Published private(set) var formatText = "无摄像头"
-    /// Percentage of the lens image circle that the corners of the preview
-    /// reach. Reported by the renderer so the calibration panel can show the
-    /// same number the GPU shader is using.
-    @Published private(set) var lensCoverage: Float = 0
-
-    /// Called on the main thread by the renderer's HUD update.
-    func reportCoverage(_ percent: Float) {
-        lensCoverage = percent
-    }
+    @Published private(set) var formatText = "No camera"
     @Published private(set) var activeFPS = 60
     @Published private(set) var measuredFPS = 0
     @Published private(set) var error: String?
 
-    // Focus and exposure state, mirrored for the UI.
-    @Published private(set) var exposureBias: Float = 0
-    @Published private(set) var exposureBiasRange: ClosedRange<Float> = -8...8
-    @Published private(set) var aeafLocked = false
-
-    /// Read from the capture queue; `aeafLocked` is the main-thread mirror.
-    private var aeafLockedSnapshot = false
-    private var microphoneInput: AVCaptureDeviceInput?
-    private var audioOutput: AVCaptureAudioDataOutput?
-    private var audioSettings: [String: Any]?
-    /// The device currently feeding the session, kept so focus, exposure and
-    /// bias can be driven after configuration has finished.
-    private var activeDevice: AVCaptureDevice?
-
-    // Bias updates arrive far faster than the hardware should be reconfigured,
-    // so the newest request is coalesced instead of queueing every drag event.
-    private let biasLock = NSLock()
-    private var pendingBias: Float?
-    private var biasApplyScheduled = false
-    private var lastBiasPublish: CFTimeInterval = 0
-
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
-
-    /// One-shot frame requests. A queue rather than a single slot: the automatic
-    /// cabinet search runs on a timer now, and with one slot it would silently
-    /// cancel whatever the user had just asked for — a lens measurement would
-    /// simply do nothing.
-    private var pendingGrids: [(FrameGrid?) -> Void] = []
-    /// The image plus the capture time, because a detection is turned into a
-    /// world direction and that has to use the pose the frame was taken with,
-    /// not the one the phone has by the time Vision has finished.
-    private var pendingImages: [(CGImage?, Double) -> Void] = []
-    private let gridLock = NSLock()
-
-    // Saving one untouched frame, for checking detection and calibration
-    // against the real thing instead of against assumptions.
-    private var stillRequested = false
-    private let stillLock = NSLock()
-    private let ciContext = CIContext()
-    @Published private(set) var rawFrameMessage: String?
-
-    /// Collecting a training set: one untouched frame every interval while the
-    /// phone is moved around the machine. `collecting` and the timer are guarded
-    /// by `stillLock` because the capture callback reads them off the main
-    /// thread; the published copies are for the panel only.
-    private var collecting = false
-    private var lastCollectionTime: Double = 0
-    private let collectionInterval: Double = 1.0
-    @Published private(set) var isCollectingFrames = false
-    @Published private(set) var collectedFrames = 0
-
-    /// Writes the next camera frame, exactly as the pipeline receives it, into
-    /// the app's Documents folder. Visible in the Files app.
-    func captureRawFrame() {
-        stillLock.lock()
-        stillRequested = true
-        stillLock.unlock()
-    }
-
-    /// Starts or stops the training-set burst.
-    ///
-    /// This is not meant to run while recording: the JPEG encode happens on the
-    /// capture callback, so each frame costs one dropped video frame. While
-    /// collecting, that is a fair trade; mid-recording it would not be.
-    func toggleRawFrameCollection() {
-        stillLock.lock()
-        collecting.toggle()
-        lastCollectionTime = 0
-        let nowCollecting = collecting
-        stillLock.unlock()
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.isCollectingFrames = nowCollecting
-            self.collectedFrames = 0
-            self.rawFrameMessage = nowCollecting
-                ? "开始采集：每秒 1 张。对着机台慢慢走动，存到「文件」→ SteadyFisheye/frames/"
-                : "采集已停止"
-        }
-    }
-
-    private func saveRawFrame(_ pixelBuffer: CVPixelBuffer, counted: Bool = false) {
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let data = ciContext.jpegRepresentation(
-                of: image,
-                colorSpace: CGColorSpaceCreateDeviceRGB()) else {
-            DispatchQueue.main.async { [weak self] in
-                self?.rawFrameMessage = "原始帧编码失败"
-            }
-            return
-        }
-        let manager = FileManager.default
-        guard let documents = manager.urls(for: .documentDirectory,
-                                           in: .userDomainMask).first else { return }
-        let folder = documents.appendingPathComponent("SteadyFisheye/frames",
-                                                      isDirectory: true)
-        try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
-        let name = "frame-\(Int(Date().timeIntervalSince1970)).jpg"
-        let url = folder.appendingPathComponent(name)
-        let ok = (try? data.write(to: url)) != nil
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if counted {
-                if ok { self.collectedFrames += 1 }
-            } else {
-                self.rawFrameMessage = ok
-                    ? "原始帧已存到「文件」→ SteadyFisheye/frames/\(name)"
-                    : "原始帧写入失败"
-            }
-        }
-    }
-
-    /// Asks for one frame, decimated to a luminance grid, for measuring
-    /// the lens circle or finding the cabinet. Runs off the main thread.
-    func requestFrameGrid(_ handler: @escaping (FrameGrid?) -> Void) {
-        gridLock.lock()
-        pendingGrids.append(handler)
-        gridLock.unlock()
-    }
-
-    /// The same one-shot hand-off, but as a full image: the trained screen
-    /// detector needs colour and detail, which the luminance grid throws away.
-    ///
-    /// The image is rendered here, while the capture buffer is still valid, so
-    /// nothing is held across frames.
-    func requestFrameImage(_ handler: @escaping (CGImage?, Double) -> Void) {
-        gridLock.lock()
-        pendingImages.append(handler)
-        gridLock.unlock()
-    }
 
     private let sessionQueue = DispatchQueue(label: "steadyfisheye.camera.session",
                                               qos: .userInitiated)
     private let videoQueue = DispatchQueue(label: "steadyfisheye.camera.video",
                                            qos: .userInitiated)
-    private let audioQueue = DispatchQueue(label: "steadyfisheye.camera.audio",
-                                           qos: .userInitiated)
     private var selectedLens: Lens = .ultraWide
-    /// Lens to bring up on the first configuration, so the camera starts on the
-    /// same lens whose stored calibration was loaded.
-    var initialLens: Lens?
     private var configured = false
     private var output: AVCaptureVideoDataOutput?
     private var lastFrameTimestamp: Double = 0
@@ -203,15 +48,6 @@ final class CameraService: NSObject, ObservableObject,
     private var lastFPSPublishTime: Double = 0
 
     static func requestAccess(completion: @escaping (Bool) -> Void) {
-        // Ask for the microphone first so the audio input can be part of the
-        // very first session configuration. Capture access is the one the app
-        // cannot work without, so its answer is what gets reported back.
-        AVCaptureDevice.requestAccess(for: .audio) { _ in
-            requestVideoAccess(completion: completion)
-        }
-    }
-
-    private static func requestVideoAccess(completion: @escaping (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             DispatchQueue.main.async { completion(true) }
@@ -228,7 +64,7 @@ final class CameraService: NSObject, ObservableObject,
         sessionQueue.async { [weak self] in
             guard let self else { return }
             guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
-                self.setError("未获得相机权限")
+                self.setError("Camera permission is not granted")
                 return
             }
             if !self.configured {
@@ -273,166 +109,7 @@ final class CameraService: NSObject, ObservableObject,
         }
     }
 
-    // MARK: - Focus and exposure
-
-    /// Runs `body` with the device locked for configuration.
-    ///
-    /// Every device change goes through here. `unlockForConfiguration()` raises
-    /// an Objective-C exception — an immediate crash — when the matching lock
-    /// did not succeed, so the lock is always proven before the unlock, and no
-    /// caller is allowed to hand-roll the pairing.
-    private func withDevice(_ body: (AVCaptureDevice) -> Void) {
-        guard let device = activeDevice else { return }
-        guard (try? device.lockForConfiguration()) != nil else { return }
-        body(device)
-        device.unlockForConfiguration()
-    }
-
-    /// Focuses and meters at a point in the sensor's normalised coordinate
-    /// space — the space `AVCaptureDevice` expects, where (0,0) is the top-left
-    /// of the unrotated sensor. Callers must convert from a preview point
-    /// through the lens mapping first; a raw screen coordinate would land in
-    /// the wrong place once the fisheye correction is applied.
-    func focusAndExpose(atDevicePoint point: CGPoint) {
-        guard point.x >= 0, point.x <= 1, point.y >= 0, point.y <= 1 else { return }
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            self.withDevice { device in
-                if device.isFocusPointOfInterestSupported,
-                   device.isFocusModeSupported(.autoFocus) {
-                    device.focusPointOfInterest = point
-                    device.focusMode = .autoFocus
-                }
-                if device.isExposurePointOfInterestSupported,
-                   device.isExposureModeSupported(.autoExpose) {
-                    device.exposurePointOfInterest = point
-                    device.exposureMode = .autoExpose
-                }
-            }
-
-            // Apple focuses once on the tapped point and then keeps tracking
-            // slowly, so panning away does not leave focus stuck at a stale
-            // distance. Hand back to the continuous modes after the one-shot
-            // has had time to settle.
-            self.sessionQueue.asyncAfter(deadline: .now() + 1.6) { [weak self] in
-                guard let self, !self.aeafLockedSnapshot else { return }
-                self.withDevice { device in
-                    if device.isFocusModeSupported(.continuousAutoFocus) {
-                        device.focusMode = .continuousAutoFocus
-                    }
-                    if device.isExposureModeSupported(.continuousAutoExposure) {
-                        device.exposureMode = .continuousAutoExposure
-                    }
-                }
-            }
-        }
-    }
-
-    /// Exposure compensation. The slider emits events far faster than the
-    /// capture device should be reconfigured, and the UI only calls this a few
-    /// times a second while dragging plus once on release.
-    func setExposureBias(_ value: Float) {
-        biasLock.lock()
-        pendingBias = value
-        let shouldSchedule = !biasApplyScheduled
-        biasApplyScheduled = true
-        biasLock.unlock()
-        guard shouldSchedule else { return }
-        applyPendingBiasSoon()
-    }
-
-    /// Applies the newest requested bias, dropping whatever arrived in the
-    /// meantime. The pending slot always holds the latest value, so skipping
-    /// the intermediate ones costs nothing and keeps the capture device from
-    /// being reconfigured once per drag event.
-    private func applyPendingBiasSoon() {
-        sessionQueue.asyncAfter(deadline: .now() + 0.04) { [weak self] in
-            guard let self else { return }
-            self.biasLock.lock()
-            let latest = self.pendingBias
-            self.pendingBias = nil
-            // Cleared before the value is applied: anything arriving from here
-            // on schedules its own pass instead of being silently dropped.
-            self.biasApplyScheduled = false
-            self.biasLock.unlock()
-
-            guard let latest = latest, latest.isFinite else { return }
-            var applied: Float?
-            self.withDevice { device in
-                let low = Self.saneBias(device.minExposureTargetBias, fallback: -8)
-                let high = max(Self.saneBias(device.maxExposureTargetBias, fallback: 8), low)
-                let clamped = min(max(latest, low), high)
-                guard clamped.isFinite else { return }
-                device.setExposureTargetBias(clamped, completionHandler: nil)
-                applied = clamped
-            }
-
-            // Publish at most a few times a second. Each publish rebuilds every
-            // view that reads the bias — including the slider the finger is on
-            // — and doing that once per drag event is what took the UI down.
-            guard let clamped = applied else { return }
-            let now = CACurrentMediaTime()
-            guard now - self.lastBiasPublish > 0.08 else { return }
-            self.lastBiasPublish = now
-            DispatchQueue.main.async {
-                self.exposureBias = clamped
-            }
-        }
-    }
-
-    /// Device-reported limits are used to clamp the bias, so a NaN or an
-    /// absurd value from a quirky lens would otherwise be forwarded straight
-    /// into `setExposureTargetBias`, which rejects out-of-range input.
-    private static func saneBias(_ value: Float, fallback: Float) -> Float {
-        guard value.isFinite, abs(value) < 100 else { return fallback }
-        return value
-    }
-
-    /// Long-pressing takes the same meaning it has in the system camera: the
-    /// current focus and exposure are frozen until the user unlocks them.
-    func setAEAFLocked(_ locked: Bool) {
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            self.aeafLockedSnapshot = locked
-            self.withDevice { device in
-                if locked {
-                    if device.isFocusModeSupported(.locked) {
-                        device.focusMode = .locked
-                    }
-                    if device.isExposureModeSupported(.locked) {
-                        device.exposureMode = .locked
-                    }
-                } else {
-                    if device.isFocusModeSupported(.continuousAutoFocus) {
-                        device.focusMode = .continuousAutoFocus
-                    }
-                    if device.isExposureModeSupported(.continuousAutoExposure) {
-                        device.exposureMode = .continuousAutoExposure
-                    }
-                    // Drop the points of interest so the system meters and
-                    // focuses the whole frame again, the way it does when you
-                    // dismiss the lock in the system camera.
-                    if device.isExposurePointOfInterestSupported {
-                        device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5)
-                    }
-                    if device.isFocusPointOfInterestSupported {
-                        device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
-                    }
-                }
-            }
-            let value = locked
-            DispatchQueue.main.async { self.aeafLocked = value }
-        }
-    }
-
     private func configure() {
-        // The very first configuration honours the lens whose calibration was
-        // restored, so the app does not start on one lens and load the other
-        // lens's profile.
-        if let initial = initialLens {
-            selectedLens = initial
-            initialLens = nil
-        }
         session.beginConfiguration()
         // inputPriority lets the explicitly selected activeFormat (including
         // its 60 FPS capability) win over a preset's automatic format choice.
@@ -446,18 +123,17 @@ final class CameraService: NSObject, ObservableObject,
         guard let device = discovery.devices.first(where: { $0.deviceType == selectedLens.deviceType })
                 ?? discovery.devices.first
                 ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            finishConfiguration(with: "未找到后置摄像头")
+            finishConfiguration(with: "No rear camera was found")
             return
         }
 
         do {
             let input = try AVCaptureDeviceInput(device: device)
             guard session.canAddInput(input) else {
-                finishConfiguration(with: "无法添加相机输入")
+                finishConfiguration(with: "The camera input could not be added")
                 return
             }
             session.addInput(input)
-            activeDevice = device
 
             try device.lockForConfiguration()
             device.videoZoomFactor = 1.0
@@ -477,28 +153,14 @@ final class CameraService: NSObject, ObservableObject,
             }
             guard supports60 else {
                 device.unlockForConfiguration()
-                finishConfiguration(with: "该摄像头不支持 60 帧")
+                finishConfiguration(with: "This camera does not provide 60 FPS")
                 return
             }
             device.activeVideoMinFrameDuration = targetDuration
             device.activeVideoMaxFrameDuration = targetDuration
-
-            // Publish the exposure compensation range this device actually
-            // accepts, so the UI slider can span exactly that. The upper bound
-            // is forced to be at least the lower one: building a ClosedRange
-            // with upper < lower traps at runtime, and a device that reports
-            // inconsistent limits would otherwise take the whole app down.
-            let low = Self.saneBias(device.minExposureTargetBias, fallback: -8)
-            let high = max(Self.saneBias(device.maxExposureTargetBias, fallback: 8), low)
-            let initialBias = min(max(Self.saneBias(device.exposureTargetBias, fallback: 0), low),
-                                  high)
-            DispatchQueue.main.async { [weak self] in
-                self?.exposureBiasRange = low...high
-                self?.exposureBias = initialBias
-            }
             device.unlockForConfiguration()
         } catch {
-            finishConfiguration(with: "相机初始化失败：\(error.localizedDescription)")
+            finishConfiguration(with: "Camera setup failed: \(error.localizedDescription)")
             return
         }
 
@@ -511,13 +173,13 @@ final class CameraService: NSObject, ObservableObject,
             kCVPixelFormatType_32BGRA
         ]
         guard let pixelFormat = preferred.first(where: supported.contains) else {
-            finishConfiguration(with: "相机未返回受支持的像素格式")
+            finishConfiguration(with: "The camera returned no supported pixel format")
             return
         }
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
         guard session.canAddOutput(videoOutput) else {
-            finishConfiguration(with: "无法添加视频输出")
+            finishConfiguration(with: "The video output could not be added")
             return
         }
         session.addOutput(videoOutput)
@@ -533,37 +195,8 @@ final class CameraService: NSObject, ObservableObject,
             connection.isVideoMirrored = false
         }
 
-        // Microphone, so recordings carry sound. Added only when access is
-        // already granted: an audio input that the system refuses would take
-        // the whole session down with it, and silent video beats no video.
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-           let microphone = AVCaptureDevice.default(for: .audio),
-           let audioInput = try? AVCaptureDeviceInput(device: microphone),
-           session.canAddInput(audioInput) {
-            session.addInput(audioInput)
-            let audioOutput = AVCaptureAudioDataOutput()
-            audioOutput.setSampleBufferDelegate(self, queue: audioQueue)
-            if session.canAddOutput(audioOutput) {
-                session.addOutput(audioOutput)
-                microphoneInput = audioInput
-                self.audioOutput = audioOutput
-                audioSettings = audioOutput.recommendedAudioSettingsForAssetWriter(
-                    writingTo: .mp4)
-            }
-        }
-
         session.commitConfiguration()
         configured = true
-
-        if microphoneInput != nil {
-            // The capture session drives the microphone, so the audio session
-            // has to allow recording before the session starts running.
-            let audioSession = AVAudioSession.sharedInstance()
-            try? audioSession.setCategory(.playAndRecord,
-                                          mode: .videoRecording,
-                                          options: [.defaultToSpeaker, .allowBluetooth])
-            try? audioSession.setActive(true)
-        }
         let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let format = "\(dimensions.width)x\(dimensions.height) · " + fourCC(pixelFormat)
         let effectiveLens: Lens = device.deviceType == .builtInUltraWideCamera ? .ultraWide : .wide
@@ -647,12 +280,6 @@ final class CameraService: NSObject, ObservableObject,
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        // Audio arrives on its own output and queue; it only needs to reach the
-        // recorder, and it must never fall through into the video path.
-        if output is AVCaptureAudioDataOutput {
-            onAudioSample?(sampleBuffer)
-            return
-        }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         let captureTime = timestamp.isFinite ? timestamp : CACurrentMediaTime()
@@ -672,48 +299,6 @@ final class CameraService: NSObject, ObservableObject,
             }
         }
         lastFrameTimestamp = captureTime
-
-        // One-shot hand-off for measuring the lens circle. The frame is
-        // decimated right here while the buffer is still valid, so no pool
-        // buffer is held across frames.
-        gridLock.lock()
-        let grids = pendingGrids
-        let images = pendingImages
-        pendingGrids = []
-        pendingImages = []
-        gridLock.unlock()
-        if !grids.isEmpty {
-            let grid = FrameGrid.make(from: pixelBuffer)
-            DispatchQueue.global(qos: .userInitiated).async {
-                for handler in grids { handler(grid) }
-            }
-        }
-        if !images.isEmpty {
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let image = ciContext.createCGImage(ciImage, from: ciImage.extent)
-            let time = captureTime
-            DispatchQueue.global(qos: .userInitiated).async {
-                for handler in images { handler(image, time) }
-            }
-        }
-
-        stillLock.lock()
-        let wantsStill = stillRequested
-        stillRequested = false
-        // The burst timer lives under the same lock, since this callback is the
-        // only producer and it is not on the main thread.
-        var wantsBurst = false
-        if collecting, captureTime - lastCollectionTime >= collectionInterval {
-            lastCollectionTime = captureTime
-            wantsBurst = true
-        }
-        stillLock.unlock()
-        if wantsStill {
-            saveRawFrame(pixelBuffer)
-        } else if wantsBurst {
-            saveRawFrame(pixelBuffer, counted: true)
-        }
-
         onFrame?(pixelBuffer, captureTime)
     }
 }

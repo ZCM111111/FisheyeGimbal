@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
+    <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>鱼眼防抖</string>
+    <string>SteadyFisheye</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -22,32 +22,10 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
-    <!-- Without a launch screen declaration iOS assumes the app predates the
-         current screen sizes and runs it letterboxed in a legacy window, which
-         is what put black bars above and below the whole app. An empty
-         UILaunchScreen dictionary opts into the native full screen. -->
-    <key>UILaunchScreen</key>
-    <dict/>
-    <!-- Dark mode keeps the generated launch screen black instead of flashing
-         white before the camera starts. -->
-    <key>UIUserInterfaceStyle</key>
-    <string>Dark</string>
     <key>NSCameraUsageDescription</key>
-    <string>需要使用相机来实时显示去畸变后的画面。</string>
+    <string>SteadyFisheye needs the camera for the live corrected preview.</string>
     <key>NSMotionUsageDescription</key>
-    <string>需要使用陀螺仪与重力感应来锁定拍摄方向、保持地平线水平。</string>
-    <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>需要把录制好的视频保存到相册。</string>
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>需要访问相册，才能把录制好的视频存进去。</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>需要使用麦克风为录制的视频录入声音。</string>
-    <!-- Recordings are also written to the app's Documents folder, so a video
-         is never lost when the photo library cannot take it. -->
-    <key>UIFileSharingEnabled</key>
-    <true/>
-    <key>LSSupportsOpeningDocumentsInPlace</key>
-    <true/>
+    <string>SteadyFisheye uses device motion to keep the view pointed at the locked direction.</string>
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>
